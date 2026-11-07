@@ -1,0 +1,8 @@
+* text=auto eol=lf
+
+# Windows PowerShell 5.1 needs CRLF and keeps a UTF-8 BOM in the scripts.
+*.ps1 text eol=crlf
+
+# Binary assets.
+*.ico binary
+*.png binary

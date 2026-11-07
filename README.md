@@ -1,0 +1,296 @@
+<p align="center"><img src="docs/assets/logo.png" width="132" alt="AnyTranslate logo"></p>
+
+<h1 align="center">AnyTranslate</h1>
+
+<p align="center"><b>PotPlayer 实时字幕翻译插件：一个 <code>.as</code> 文件，接入任意 LLM / JSON 翻译 API。</b></p>
+
+<p align="center">
+  <a href="CHANGELOG.md"><img alt="Version 0.1.0" src="https://img.shields.io/badge/version-0.1.0-f59e0b.svg"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="PotPlayer 26.10+" src="https://img.shields.io/badge/PotPlayer-26.10%2B-2f6f9f.svg">
+  <img alt="5 protocols" src="https://img.shields.io/badge/protocols-5-14b8a6.svg">
+  <a href="https://github.com/RedHeartSecretMan/any-translate/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RedHeartSecretMan/any-translate/actions/workflows/ci.yml/badge.svg"></a>
+</p>
+
+<p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#配置语法">配置语法</a> ·
+  <a href="#服务商预设">服务商预设</a> ·
+  <a href="#故障排查">故障排查</a> ·
+  <a href="#文档">文档</a> ·
+  <a href="CHANGELOG.md">更新日志</a>
+</p>
+
+---
+
+AnyTranslate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译插件：把一条外文字幕交给任意 LLM 或翻译 API，返回一条目标语言字幕。整个插件只有一个 AngelScript 文件，没有安装器依赖，也不需要改源码换服务商。
+
+内置 OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama 原生和自定义 JSON 五种协议；OpenAI、DeepSeek、Kimi、智谱、通义千问、硅基流动、OpenRouter、Groq、xAI、Mistral、Together、LM Studio、vLLM 等 16 个预设开箱即用，one-api/new-api 等网关和其他接口用一行 `custom|...` 配置接入。
+
+> 仓库名是 **any-translate**；PotPlayer 要求翻译插件文件名为 `SubtitleTranslate - <Name>.as`，因此成品文件保留 `SubtitleTranslate - AnyTranslate` 前缀，菜单显示名由插件内的 `GetTitle()` 决定。
+
+## 为什么是 any-translate
+
+- **一个脚本覆盖多协议。** 五种请求/响应适配器共用同一套配置语法，换协议不改代码。
+- **配置只占一行。** 登录框的"用户"字段用 `preset:model` 或 `custom|url|model|opts` 表达，不用编辑文件。
+- **失败要说人话。** 登录时自检 Key 与模型名，按 401/402/404/413/422/429/5xx 给出中文提示，并列出可用模型。
+- **实时场景优先。** 上下文窗口、译文缓存、自动降级、同步 HTTP，都是为 PotPlayer 的单次字幕调用设计的。
+- **隐私默认。** 不做任何上报，只请求你填写的 URL；Key 只保存在本机。
+
+## 特性
+
+| 能力 | 说明 |
+| --- | --- |
+| 多协议 | OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama 原生、自定义 JSON |
+| 16 个预设 + custom | 换服务商/模型只改登录框里的一行配置 |
+| 上下文翻译 | 保留最近 4 句原文作为语境，提升指代与术语一致性 |
+| 缓存去重 | 相同台词命中缓存（最近 64 条），避免重复请求与计费 |
+| 登录自检 | 按协议探测模型列表，校验 Key 与模型名，失败给出可操作提示 |
+| 自动降级 | 服务端拒绝 `temperature` / `max_tokens` 时改用最小请求体并记住 |
+| 诊断模式 | `debug=1` 打开脚本控制台，查看状态码、耗时与脱敏后的响应 |
+| 82 种语言 | 目标语言以中文或母语名显示，提示词映射为模型更易理解的语言名 |
+| 隐私默认 | 无遥测；Key 由 PotPlayer 的 `HostSaveString` 保存在本机（非加密） |
+
+## 快速开始
+
+### 1. 安装插件
+
+关闭 PotPlayer，把 `plugin/` 下的两个文件复制到：
+
+```text
+PotPlayer 安装目录\Extension\Subtitle\Translate\
+```
+
+即 `SubtitleTranslate - AnyTranslate.as` 与 `SubtitleTranslate - AnyTranslate.ico`。
+
+也可以运行仓库根目录的脚本（自动检测安装路径、备份旧文件）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+卸载：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
+```
+
+### 2. 启用实时字幕
+
+重启 PotPlayer，右键画面 → **字幕** → **实时字幕翻译** → **实时字幕设置**，勾选"生成有声字幕（实时）"，然后在同一窗口选择翻译插件 **AnyTranslate**。
+
+### 3. 登录并配置
+
+点击插件旁边的配置/登录按钮：
+
+- **用户** 框填服务与模型，例如 `deepseek:deepseek-v4-flash`；
+- **密码** 框填 API Key（本机服务可以留空）；
+- 点确定后插件会自检 Key 与模型名，失败会提示原因和可用模型。
+
+| 场景 | 用户框 | 密码框 |
+| --- | --- | --- |
+| Ollama（本机） | `ollama:qwen3:4b` | 留空 |
+| LM Studio（本机） | `lmstudio` | 留空 |
+| vLLM（本机） | `vllm` | 留空 |
+| DeepSeek（云端） | `deepseek:deepseek-v4-flash` | `sk-...` |
+| OpenAI（云端） | `openai:gpt-5.6-terra` | `sk-...` |
+| Anthropic（云端） | `anthropic:claude-sonnet-4-6` | `sk-ant-...` |
+| Google Gemini（云端） | `gemini:gemini-3.5-flash` | AIza... |
+| 自定义接口 | `custom|https://your-gateway/v1/chat/completions|model-name` | 网关 Key |
+
+模型名只是示例，以服务商当前 `/models` 列表为准；填错时登录会提示可用模型。
+
+### 4. 播放验证
+
+播放带字幕的视频，字幕出现后会在数秒内被替换为目标语言。首次请求可能较慢（云端模型冷启动或本机模型加载）；想看每次请求的状态码与耗时，给配置追加 `|debug=1`。
+
+## 配置语法
+
+登录框 **用户** 字段：
+
+```text
+preset[:model][|opts]                       例：deepseek:deepseek-v4-flash|debug=1
+custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com/v1/chat/completions|my-model|path=choices[0].message.content
+```
+
+- `preset` 不区分大小写；`model` 只按**第一个** `:` 切分，所以 `ollama:qwen3:4b` 合法。
+- 任意 spec 都可以在结尾用 `|` 追加 opts（预设与 custom 都支持）。
+- `custom` 的 `endpoint_url` 是完整请求地址，不再追加协议路径。
+- `opts` 用 `;` 分隔、`=` 赋值；可用：`path`、`auth`、`keyname`、`body`、`temp`、`max_tokens`、`minimal`、`version`、`probe`、`debug`。
+- `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`（没有转义机制）。
+- `auth=query` 会把 Key 拼进 URL（参数名 `keyname`，默认 `key`）；能走请求头就别用 query，Key 会出现在代理/网关日志里。`auth=query` 只对支持 URL 鉴权的服务有意义（Gemini、部分自定义网关）；OpenAI / Anthropic 官方接口不接受 query 鉴权，会以 401 明确失败。
+- 密码框留空时沿用上次保存的 Key；用户框留空时沿用上次保存的 spec。
+
+### custom 选项
+
+| 选项 | 含义 | 默认 |
+| --- | --- | --- |
+| `path` | 响应里的译文 JSON 路径，支持 `a.b[0].c`（下标仅 0-9） | `choices[0].message.content` |
+| `auth` | `bearer` / `x-api-key` / `query` / `none` | `bearer` |
+| `keyname` | 鉴权头名，或 query 参数名 | `Authorization` |
+| `body` | 请求体模板，占位符 `{{prompt}}` `{{text}}` `{{model}}` `{{src}}` `{{dst}}` | OpenAI 兼容体 |
+| `temp` | 采样温度 | `0.2` |
+| `max_tokens` | 输出上限（默认不发送） | 不发送 |
+| `minimal` | `1` = 强制最小请求体 | `0` |
+| `version` | Anthropic `anthropic-version` 头 | `2023-06-01` |
+| `probe` | 登录自检 `models` / `none` | `none` |
+| `debug` | `1` = 打开诊断控制台 | `0` |
+
+注意各选项的生效范围：`body` 只对 `custom` 生效；`path`/`auth`/`keyname`/`probe` 对任意 spec 生效；`version` 只对 Anthropic 请求头生效；`probe=models` 只对预设生效（`custom` 登录不做自检）。
+
+### 自定义接口例子
+
+LibreTranslate（自建）：
+
+```text
+custom|http://127.0.0.1:5000/translate|any|body={"q":"{{text}}","source":"{{src}}","target":"{{dst}}","format":"text"};path=translatedText;auth=none
+```
+
+Azure OpenAI（Key 头名是 `api-key`，部署名在 URL 里）：
+
+```text
+custom|https://YOUR.openai.azure.com/openai/deployments/DEPLOY/chat/completions?api-version=2024-10-21|any|auth=x-api-key;keyname=api-key
+```
+
+自定义 OpenAI 兼容网关（有非标准响应结构时）：
+
+```text
+custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;auth=bearer
+```
+
+## 服务商预设
+
+| preset | 协议 | 默认模型 | 备注 |
+| --- | --- | --- | --- |
+| `openai` | OpenAI 兼容 | `gpt-5.6-terra` | 推理模型自动降级 |
+| `deepseek` | OpenAI 兼容 | `deepseek-v4-flash` | 自动关闭思考模式 |
+| `moonshot` | OpenAI 兼容 | `kimi-k3.1-pro` | |
+| `zhipu` | OpenAI 兼容 | `glm-5.3` | 路径无 `/v1` |
+| `qwen` | OpenAI 兼容 | `qwen-flash` | DashScope 兼容模式，自动关闭思考 |
+| `siliconflow` | OpenAI 兼容 | `deepseek-ai/DeepSeek-V4-Flash` | 自动关闭思考 |
+| `openrouter` | OpenAI 兼容 | `openai/gpt-5.6-terra` | |
+| `groq` | OpenAI 兼容 | `openai/gpt-oss-120b` | |
+| `xai` | OpenAI 兼容 | `grok-4.20` | |
+| `mistral` | OpenAI 兼容 | `mistral-small-latest` | |
+| `together` | OpenAI 兼容 | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | |
+| `lmstudio` | OpenAI 兼容 | 服务端默认模型 | 无鉴权 |
+| `vllm` | OpenAI 兼容 | 服务端默认模型 | 无鉴权 |
+| `ollama` | Ollama 原生 | `qwen3:4b` | 无鉴权，`think:false` |
+| `anthropic` | Anthropic | `claude-sonnet-4-6` | `x-api-key` |
+| `gemini` | Gemini | `gemini-3.5-flash` | Key 走 `x-goog-api-key` 头 |
+| `custom` | 默认 OpenAI 兼容 | 用户自填 | 完整请求地址 |
+
+## 故障排查
+
+| 现象 | 原因与处理 |
+| --- | --- |
+| 菜单里没有 AnyTranslate | 文件没放对目录，或 PotPlayer 版本过旧（缺少 `HostOpenHTTP` 会导致脚本加载失败）。重启 PotPlayer 再看。 |
+| 登录提示 401/403 | Key 错误、没填，或该 Key 没有该模型权限。 |
+| 登录提示 402 | 账户余额不足。 |
+| 登录提示 404/405 | 一般不会出现：预设服务没有 `/models` 时插件会跳过模型校验。若出现，按提示检查地址。 |
+| 登录提示 429 | 限流，稍后再试。 |
+| 登录提示"未找到模型" | 按提示列表里的可用模型改 `preset:model`。 |
+| 有一个原文没有译文 | 运行期失败是静默的。重新登录看自检结果；或加 `debug=1`（如 `deepseek:deepseek-v4-flash|debug=1`）后看控制台状态码与耗时。 |
+| 登录失败后突然都不翻译了 | 登录自检失败会置"已登出"状态，避免用错误配置逐行请求；重新登录成功即恢复。 |
+| 400 但登录正常 | 模型不接受 `temperature`/`max_tokens`；插件会自动降级，若仍失败请确认模型名。 |
+| 延迟很高 | 云端推理模型会先思考；换非推理模型，或确认预设已关闭思考。Ollama（本机）首次加载模型也要几十秒，可先手动 `ollama run` 预热。 |
+| 翻译串味/不连贯 | 上下文只有 4 句；暂停超过 2 分钟会自动清空。 |
+
+调试示例：`deepseek:deepseek-v4-flash|debug=1`。高级选项（`path`、`body`、`minimal`、`temp` 等）可以加在任意 spec 的 `|` 之后；`custom|...|...|opts` 也支持同样的 opts 语法。
+
+## 性能与成本
+
+- 单条字幕的输入约 100-250 tokens，输出 10-80 tokens。
+- 本机小模型 200-800 ms；国内云非推理模型 0.3-1.0 s；海外/代理 0.8-3 s；推理模型 2-30 s。
+- 缓存可挡掉重复台词；上下文 4 句是可调常量（源码 `MAX_HISTORY`）。
+- 每 1000 条字幕成本量级：¥0.01-0.5，随模型价差很大。
+
+## 隐私与安全
+
+- 插件只向你在配置里填写的 URL 发请求，没有遥测、没有硬编码第三方服务。
+- API Key 通过 PotPlayer 的 `HostSaveString` 存在本地（**非加密**）；共享电脑上建议用完 `ServerLogout`（设置里清空）。
+- `debug=1` 时打印的 URL 会把 Key（含 URL 编码后的形式）替换成 `****`；请求体里只有字幕和提示词，不含 Key。
+- 登录框回显 Key 时，长度不足 16 位只显示 `****`，否则只显示前 4 位与后 4 位。
+- 优先用请求头鉴权；`auth=query` 会把 Key 放进 URL，可能被代理/网关日志记录。
+- 请求使用 `NoCookie=true`，不会带上 PotPlayer 为同域保存的 Cookie。
+
+## 已知限制
+
+- 同步 HTTP：一次只能翻译一条字幕，没有流式输出（PotPlayer 插件接口只接受一次性返回值）。
+- 自定义接口只支持 JSON 请求/响应；表单编码接口（如 DeepL 表单版）请用官方插件。
+- `path` 下标只支持单层 0-9，不支持 `[10]` 和多层嵌套下标。
+- 不使用线程/timer；极慢的请求（>20 s）会受 PotPlayer 脚本超时限制。
+- 82 种语言是常用集，不是完整 ISO 列表；可在源码语言表里扩展。
+- 请求前会剔除 JSON 不允许的 C0 控制字符（`\b`/`\f` 等），不转义保留。
+- `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`（spec 语法无转义）。
+- 插件尚未在全部 PotPlayer 版本上实机验证，兼容性记录见 `docs/VERIFICATION.md`。
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [DESIGN](docs/DESIGN.md) | 设计契约：宿主 API 可行性、配置语法、协议适配、错误处理、性能取舍 |
+| [STYLE](docs/STYLE.md) | 文案与命名约定：服务商标签、术语、标点与中英空格 |
+| [providers](docs/providers.md) | 各服务商的 HTTP 契约、鉴权头、请求/响应差异 |
+| [VERIFICATION](docs/VERIFICATION.md) | 验证证据、未覆盖范围、复跑命令、实机验证清单 |
+| [CONTRACT](docs/testing/CONTRACT.md) | 契约测试说明与边界决策 |
+| [ANGELSCRIPT-VALIDATION](docs/testing/ANGELSCRIPT-VALIDATION.md) | AngelScript 校验工具链调研 |
+| [CHANGELOG](CHANGELOG.md) | 版本变更记录 |
+
+## 开发与验证
+
+AngelScript 无法在本机直接执行，本项目按四层验证（本地检查需要 Python 3.10+；CI 使用 3.12）：
+
+```powershell
+# 1. 静态检查：括号配平、入口点、语言表/预设表长度、Host API 是否真实存在
+python tools/check_as.py
+
+# 2. 契约测试：Python 参考实现 + 本机 mock 服务（208 用例）
+powershell -ExecutionPolicy Bypass -File tests\run_tests.ps1
+# Windows PowerShell 5.1 与 PowerShell 7 均可；PATH 中没有 python 时加 -Python <path>
+
+# 3. 文档样式：服务商命名、术语、中文与英文/数字之间的空格
+python tools/check_style.py
+
+# 4. 实机：复制插件 → 重启 PotPlayer → 登录 → 播放带字幕视频
+```
+
+`tools/check_as.py` 默认使用仓库内的 `docs/api-signatures.txt`（从 `PotPlayer64.dll` 提取的 104 条签名）校验 Host API，也可用 `--api-doc` 指向本机 `Extension\api.txt`。CI（`.github/workflows/ci.yml`）在 Windows runner 上运行同样的检查。
+
+验证证据与未覆盖范围见 [VERIFICATION](docs/VERIFICATION.md)，文案约定见 [STYLE](docs/STYLE.md)。
+
+## 目录结构
+
+```text
+plugin/                      插件成品（复制到 PotPlayer 即可）
+  SubtitleTranslate - AnyTranslate.as
+  SubtitleTranslate - AnyTranslate.ico
+docs/
+  assets/logo.png            品牌图标（512px PNG）
+  DESIGN.md                  设计与契约
+  STYLE.md                   文案与命名约定
+  providers.md               各服务 HTTP 契约资料
+  api-signatures.txt         从 PotPlayer64.dll 提取的 API 签名
+  VERIFICATION.md            验证证据、未覆盖范围、复跑命令
+  testing/
+    CONTRACT.md              契约测试说明与边界决策
+    ANGELSCRIPT-VALIDATION.md  AngelScript 校验工具链调研
+tests/                       契约测试代码（208 用例）与 mock 服务
+tools/                       静态检查与样式检查
+install.ps1                  安装/卸载脚本
+.github/workflows/ci.yml     Windows CI
+README.md
+CHANGELOG.md
+LICENSE
+```
+
+## 致谢
+
+- PotPlayer 扩展 API 与官方随包插件提供了 `Host*` 函数与插件文件约定的先例。
+- 协议契约参考各服务商公开文档，汇总在 [providers](docs/providers.md)。
+
+## 许可
+
+[MIT](LICENSE) 版权所有 (c) 2026 RedHeartSecretMan
+
+运行时只访问你在配置里填写的 API 地址；各服务商的使用条款、计费和数据处理政策由使用者自行确认。
