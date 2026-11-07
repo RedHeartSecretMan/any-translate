@@ -1,6 +1,6 @@
 # 多服务 LLM / 翻译 API 契约手册
 
-> 配套 `docs/DESIGN.md` 的适配器实现契约。面向 PotPlayer AngelScript 插件（同步 `HostOpenHTTP` + jsoncpp，无流式）。
+> 配套 `docs/design.md` 的适配器实现契约。面向 PotPlayer AngelScript 插件（同步 `HostOpenHTTP` + jsoncpp，无流式）。
 > 核对日期：2026-11-07。全部示例 `stream:false`；`model` 名仅为示例，运行期以各服务 `/models` 或控制台为准；标「待验证」的条目未在官方文档直接确认。
 
 ## 0. 通用约定
@@ -311,7 +311,7 @@ curl -sS http://localhost:11434/api/tags
 
 ## 5. 通用「自定义 JSON API」
 
-DESIGN.md 的 `custom|<base_url>|<model>|[opts]` 用 body 模板 + 响应路径覆盖任意 REST 翻译接口（参考 [DeepL](https://developers.deepl.com/docs/api-reference/translate)、[Google v2](https://cloud.google.com/translate/docs/reference/rest/v2/translate)、[LibreTranslate](https://libretranslate.com/docs/)）。
+design.md 的 `custom|<base_url>|<model>|[opts]` 用 body 模板 + 响应路径覆盖任意 REST 翻译接口（参考 [DeepL](https://developers.deepl.com/docs/api-reference/translate)、[Google v2](https://cloud.google.com/translate/docs/reference/rest/v2/translate)、[LibreTranslate](https://libretranslate.com/docs/)）。
 
 - 请求体模板：`body={"q":"{{text}}","source":"{{src}}","target":"{{dst}}","format":"text"}`（`{{prompt}}` 为完整提示词，`{{model}}` 为模型名）。
 - 占位符替换前先做 JSON 转义（`\`、`"`、换行、控制字符），否则含引号的字幕会破坏 JSON。
@@ -395,4 +395,4 @@ google 系响应可能对文本做 HTML 实体转义（`&#39;`），插件侧需
 
 待验证：GLM `temperature` 上限与错误体；Mistral 错误体；SiliconFlow 错误体；Kimi/GLM 思考模式对 `temperature` 的约束；Gemini `thinkingBudget: 0` 在全部模型上的效果；Ollama `message.thinking` 字段名；Anthropic `anthropic-version: 2023-06-01` 在 2026 是否仍被接受。
 
-与 `docs/DESIGN.md` 预设表的差异（2026 核对）：Anthropic 版本头示例已为 `2026-10-21`；DeepSeek 模型为 `deepseek-v4-flash`/`deepseek-v4-pro` 且 thinking 默认开；Kimi 为 `kimi-k3.1-pro`；GLM 为 `glm-5.3`；DashScope 建议迁移 workspace 专属域名；Together 官方 server 为 `api.together.ai`。预设表中的旧模型名（`gpt-4o-mini`、`deepseek-chat`、`qwen-plus`、`gemini-2.0-flash` 等）需在代码与文档中同步更新为当前可用模型。
+与 `docs/design.md` 预设表的差异（2026 核对）：Anthropic 版本头示例已为 `2026-10-21`；DeepSeek 模型为 `deepseek-v4-flash`/`deepseek-v4-pro` 且 thinking 默认开；Kimi 为 `kimi-k3.1-pro`；GLM 为 `glm-5.3`；DashScope 建议迁移 workspace 专属域名；Together 官方 server 为 `api.together.ai`。预设表中的旧模型名（`gpt-4o-mini`、`deepseek-chat`、`qwen-plus`、`gemini-2.0-flash` 等）需在代码与文档中同步更新为当前可用模型。

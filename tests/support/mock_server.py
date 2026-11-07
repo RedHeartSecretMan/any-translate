@@ -5,10 +5,10 @@
 --------
 ::
 
-    python mock_server.py --port 18080
+    python tests/support/mock_server.py --port 18080
 
     # 随机端口（日志里会打印 listening on http://127.0.0.1:<port>）
-    python mock_server.py --port 0
+    python tests/support/mock_server.py --port 0
 
 行为切换
 --------
@@ -360,7 +360,7 @@ def _has_query_key(query: Dict[str, str]) -> bool:
 def validate_request(
     route: str, headers: Dict[str, str], query: Dict[str, str], body: Any
 ) -> List[str]:
-    """按 docs/testing/CONTRACT.md 的请求契约校验；返回问题列表（空 = 合规）。
+    """按 docs/testing/contract.md 的请求契约校验；返回问题列表（空 = 合规）。
 
     认证允许两种形式：协议默认请求头，或 ``auth=query`` 的 URL 参数 ``key``
     （见 .as AppendQueryAuth；探测与翻译共用）。

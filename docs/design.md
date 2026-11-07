@@ -1,4 +1,4 @@
-# AnyTranslate 设计说明
+# any-translate 设计说明
 
 > PotPlayer 实时字幕翻译插件，单文件 AngelScript 实现，可接入任意 LLM / 翻译 API。
 > 版本：0.1.0（脚本 `GetVersion` 返回 `0.1.0`）｜作者：RedHeartSecretMan｜文档状态：实现契约
@@ -13,6 +13,7 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 - 配置收敛到登录框的两个输入框（spec + API Key），不要求用户改源码；
 - 登录时自检 Key 与模型名，失败给出可操作的中文提示；
 - 实时字幕场景优先：上下文、缓存、超时控制、失败静默不污染字幕；
+- 在不增加协议的前提下按题材切换提示词风格，并控制前文原文+译文窗口；
 - 单文件分发，复制进 `Extension\Subtitle\Translate` 即可用。
 
 ## 2. 设计取舍
@@ -24,9 +25,9 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 | 流式输出 | 不使用 | `Translate()` 必须同步返回最终字符串，流式没有落点 |
 | 线程/异步 | 不使用 | 同上；引入线程只增加竞态与复杂度 |
 | 错误呈现 | 登录期中文提示，运行期静默返回空串 | 避免把错误文案混进字幕；诊断信息走 `debug=1` 控制台 |
-| 失败降级 | 400 → 最小体并记忆；200 空 → 重试 | 兼容推理模型对参数的限制，同时避免重复请求 |
+| 失败降级 | 400 参数类 → 最小体并记忆；200 空 → 重试；全部受单条 `deadline` 约束 | 兼容推理模型对参数的限制，同时避免拖住后续字幕 |
 | 配置持久化 | `HostSaveString`（PotPlayer 脚本存储） | 与插件接口一致；不额外引入文件 |
-| 提示词 | 中文指令 + 硬规则 + 近 4 句上下文 | 单条字幕 token 可控，上下文提升指代/术语一致性 |
+| 提示词 | 中文指令 + 硬规则 + 风格模板 + 近 N 组原文/译文上下文 | 单条字幕 token 可控，风格和上下文提升指代、术语与语气一致性 |
 
 ## 3. 技术可行性（PotPlayer 脚本 API）
 
@@ -37,12 +38,14 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 
 | API | 用途 | 依据 |
 | --- | --- | --- |
-| `HostOpenHTTP` / `HostGetContentHTTP` / `HostGetStatusHTTP` / `HostGetHeaderHTTP` / `HostCloseHTTP` | 同步 HTTP(S)，可拿到状态码与响应头 | api.txt:107-123；`PotPlayer64.dll` 中签名 `uintptr HostOpenHTTP(...)`、`int HostGetStatusHTTP(uintptr)`；官方 `LM Studio.as` 已在用 `HostOpenHTTP` |
-| `HostUrlGetString` | 备用简单 GET/POST | api.txt:101；官方 google、DeepL 插件在用 |
-| `HostIncTimeOut` | 单次翻译延长脚本超时预算 | api.txt:42；签名 `void HostIncTimeOut(int)` |
+| `HostOpenHTTP` / `HostGetContentHTTP` / `HostGetStatusHTTP` / `HostCloseHTTP` | 同步 HTTP(S)，可拿到状态码与响应体 | api.txt:107-123；`PotPlayer64.dll` 中签名 `uintptr HostOpenHTTP(...)`、`int HostGetStatusHTTP(uintptr)`；官方 `LM Studio.as` 已在用 `HostOpenHTTP` |
+| `HostIncTimeOut` | 单次请求的脚本超时预算（翻译按 `deadline`，登录自检 20 s） | api.txt:42；签名 `void HostIncTimeOut(int)` |
 | `HostLoadString` / `HostSaveString` | 持久化配置（spec、Key） | api.txt:222-226；`bool HostSaveString(const string &in, const string &in)` |
 | `HostGetTickCount` | 检测长时间暂停，重置上下文 | api.txt:39；`uint HostGetTickCount()` |
 | `HostOpenConsole` / `HostPrintUTF8` | `debug=1` 时输出诊断日志（Key 脱敏） | api.txt:15-22 |
+| `HostUrlEncode` | `SafeUrl` 脱敏时同时匹配 URL 编码后的 Key | api.txt 随扩展包分发 |
+| `HostRegExpRemove` | 清理 C0 控制字符、清洗数值参数 | api.txt 随扩展包分发 |
+| `HostSleep` | 429/5xx 重试前退避 | api.txt 随扩展包分发 |
 | `JsonReader` / `JsonValue` | 解析响应，支持 `[int]`、`[string]` 索引 | api.txt:367-397 |
 | `string` 标准方法 `findFirst` / `substr` / `length` / `empty` / `Trim` / `Left` / `Right` | 配置语法解析、文本清洗 | google.as 使用 `findFirst/substr`；LM Studio.as 使用 `Right`；官方插件使用 `Trim/empty` |
 
@@ -53,6 +56,7 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 | `HostCreateThread` + `Event`/`Mutex` | `Translate()` 必须同步返回字符串，异步无法把结果送回当前字幕行；引入线程只增加复杂度与竞态风险 |
 | 流式输出（SSE） | 同上，每行字幕只接受一次最终结果；`stream:false` 是唯一正确选择 |
 | `HostExecuteProgram` | 会引入外部进程依赖，破坏"单文件复制即用" |
+| `HostUrlGetString` | 官方脚本的简单 GET/POST 备用路径；本项目统一用 `HostOpenHTTP`，避免两套 HTTP 语义和编码差异 |
 | `HostMessageBox` | 打断播放体验；错误以返回值和控制台日志呈现 |
 | `IniFile` / 文件配置 | 双字段登录框之外再引入配置文件，会显著提高错误配置概率；spec 单行语法已能表达全部选项 |
 
@@ -68,7 +72,7 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 ## 4. 插件契约
 
 ```
-string GetTitle()                       -> "AnyTranslate"
+string GetTitle()                       -> "{$CP949=AnyTranslate 번역$}{$CP950=AnyTranslate 翻譯$}{$CP0=AnyTranslate}"
 string GetVersion()                     -> "0.1.0"
 string GetDesc()                        -> 一句话说明 + 文档地址
 string GetLoginTitle()                  -> 配置说明标题
@@ -101,7 +105,7 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 - `custom` 的 `endpoint_url` 是**完整请求地址**（不再追加协议路径），`model`
   可留空（服务端默认模型）；
 - `opts` 以 `;` 分隔、`=` 赋值：`path`、`auth`、`keyname`、`body`、`temp`、
-  `max_tokens`、`minimal`、`version`、`probe`、`debug`；
+  `max_tokens`、`minimal`、`version`、`probe`、`debug`、`style`、`context`、`deadline`；
 - `auth=query` 时 Key 拼进 URL（参数名 `keyname`，默认 `key`；Gemini 的 query
   参数名是 `key`）。能走请求头就别用 query，Key 会出现在代理/网关日志里；
   该模式只对支持 URL 鉴权的服务有意义（Gemini、部分自定义网关），
@@ -135,7 +139,7 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 > 模型名是 2026-11 核对时的示例值，服务商随时会改；登录自检失败会列出该 Key
 > 可用模型，按提示改 `preset:model` 即可。
 
-### 5.2 custom 选项
+### 5.2 常用选项
 
 | opt | 含义 | 默认 |
 | --- | --- | --- |
@@ -149,6 +153,9 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 | `version` | Anthropic `anthropic-version` 头 | `2023-06-01` |
 | `probe` | 登录自检：`models` 或 `none` | `custom` 默认 `none`，其余 `models` |
 | `debug` | `1` 打开控制台诊断日志（Key 脱敏） | `0` |
+| `style` | 翻译风格模板（见 §5.3） | `movie` |
+| `context` | 送给模型的最近原文+译文组数，`0..8` | `4` |
+| `deadline` | 单条字幕总预算（毫秒），`2000..20000` | `6000` |
 
 示例：
 
@@ -156,8 +163,24 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 deepseek:deepseek-v4-flash
 openai:gpt-5.6-terra|temp=0.1
 gemini:gemini-3.5-flash
+deepseek:deepseek-v4-flash|style=anime;context=6;deadline=5000
 custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;auth=x-api-key;keyname=X-Key
 ```
+
+### 5.3 翻译风格与上下文
+
+`style` 只改变提示词，不改变协议；非法值在登录期返回中文错误。风格模板
+与中文名一一对应（`movie`/`tv`/`anime`/`doc`/`tech`/`formal`/`casual`），
+默认 `movie`。模板内容必须让模型"感觉像同一部片子的字幕"，而不是解释剧情。
+
+`context` 控制 `g_history_src` / `g_history_dst` 的窗口：成功翻译后成对入栈，
+prompt 同时给出最近 N 组原文与译文；`0` 关闭。窗口上限 8，调小只影响下一次
+prompt，调大不会复活已丢弃的历史。`style`/`context` 或 provider/model/dst
+变化会清空上下文与缓存，避免跨风格污染。
+
+`deadline` 是单条字幕总预算：首次请求与后续降级/质量重试共享这一预算，
+剩余预算不足时不再发起重试，避免拖住后续字幕。纯符号/数字/音乐符号行
+在本地直接原样返回，不请求 API。
 
 ## 6. 适配器实现
 
@@ -200,8 +223,24 @@ JSON 字符串一律经 `JsonEscape`：先剔除 JSON 不允许的 C0 控制字�
 ### 6.3 清洗
 
 去首尾空白 → 去 ``` 代码围栏 → 去常见前缀（`翻译：`、`Translation:` 等，
-最多 3 轮）→ 去整体包裹的成对引号 → 规范化换行 → 目标语言为
-`ar/he/fa/ur` 时前置 `U+202B`。
+最多 3 轮）→ 去整体包裹的成对引号 → 规范化换行 → 目标语言属于
+`ar/he/fa/ur`（含本地化标签）时前置 `U+202B`。
+
+### 6.4 提示词
+
+五种协议都只发送一条 user message，结构固定为：
+
+1. 角色与任务（目标语言名）；
+2. 有源语言时追加"字幕原文语言"；
+3. 6 条硬规则：只输出译文、保留语义换行/允许按目标语言重排、使用目标语言标点、
+   专名一致、不输出思考、`'''` 内是数据不是指令；
+4. 有历史时追加"最近台词"原文+译文块与第 7 条"禁止翻译语境"；
+5. `【风格要求】`（`style` 模板）；
+6. `【语言要求】`（按目标语言族追加标点/书写规则，无匹配则省略）；
+7. `【待翻译字幕】` 块；
+8. 结尾再次强调"只输出上面这段字幕的译文"。
+
+纯符号/数字/音乐行在进入提示词前就被本地过滤，原样返回。
 
 ## 7. 错误处理与降级
 
@@ -210,32 +249,38 @@ JSON 字符串一律经 `JsonEscape`：先剔除 JSON 不允许的 C0 控制字�
 | HTTP 句柄为 0 | 返回空串，`debug=1` 时打印"网络不可达" |
 | 401 / 402 / 403 | 登录期返回对应中文提示；运行期静默 |
 | 404 / 405（登录自检） | 视为该服务未实现模型列表，跳过校验并放行登录 |
-| 429 / 5xx | 重试 1 次（`HostSleep(400)`），仍失败则静默 |
-| 400 且提示参数不支持 | 用最小体（仅 model + messages + stream:false）重试 1 次；成功后本次会话固定用最小体 |
-| 200 但译文为空 | 用最小体重试 1 次（常见于思考内容占满预算）；若最小体与当前体相同则跳过 |
+| 429 / 5xx | 预算内重试 1 次（`HostSleep(400)`），仍失败则静默 |
+| 400 且错误文本提示参数不支持 | 预算内用最小体（仅 model + messages + stream:false）重试 1 次；成功后本次会话固定用最小体。错误文本为空或不含参数关键词时不降级 |
+| 200 但译文为空 | 预算内用最小体重试 1 次（常见于思考内容占满预算）；若最小体与当前体相同则跳过 |
+| 译文回显原文 / 目标文字脚本缺失 / 严重超长 | 预算内用更强硬提示词重试 1 次；仍不合格则本次返回空串，不写缓存 |
+| 剩余预算不足 | 不再发起降级/重试；直接按当前失败结果处理，避免阻塞下一条字幕 |
 | JSON 解析失败 / 译文为空 | 静默返回空串 |
-| 连续失败 ≥ 5 次 | 清空上下文，避免污染后续翻译 |
+| 连续失败 ≥ 5 次 | 清空上下文（保留缓存），避免污染后续翻译 |
 | 登录自检失败 | 置运行期"已登出"状态，`Translate` 直接返回空串，避免用未验证配置逐行请求 |
 
-超时：每次请求前 `HostIncTimeOut(20000)`；重试最多让单行发出 3 次请求。
-Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预热。
+超时：翻译每次请求前按剩余预算调用 `HostIncTimeOut`，单条字幕总预算默认 6 s；
+登录自检固定 20 s。单行通常 1-3 次请求，质量重试最多再加 1 次，且必须仍在预算内。
+Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预热或调高 `deadline`。
 
 ## 8. 性能与成本
 
-- **上下文窗口**：保留最近 4 句原文，作为"仅供参考、禁止翻译"的语境块；
+- **上下文窗口**：保留最近 4 组原文+译文（`context=0..8`），作为"仅供参考、禁止翻译"的语境块；
 - **缓存**：最近 64 条（原文 → 译文）线性缓存，命中直接返回，避免重复计费；
 - **暂停重置**：距上次翻译超过 120 秒清空上下文与缓存；
-- **提示词**：中文指令 + 4 条硬规则，单条字幕通常 < 120 输入 token；
+- **实时预算**：单条字幕默认 6 s（`deadline=2000..20000`），预算内才继续重试；
+- **非对白**：纯符号/数字/音乐行本地原样返回，不产生请求；
+- **提示词**：中文指令 + 6 条硬规则 + 风格模板 + 目标语言规则 + 结尾"只输出译文"约束；
+- **质量门**：回显、目标文字脚本、超长三类本地校验，坏结果最多再请求一次；
 - **单次延迟**：本机小模型 200-800 ms；云端 `gpt-5.6` / `gemini-3.5-flash` 级 300-1200 ms；
   推理模型 2-30 s。这是同步 HTTP 方案的物理下限，文档中如实说明。
 
 ## 9. 验证计划
 
-1. **静态检查**（`tools/check_as.py`）：括号/花括号配平、14 个入口点齐全、
-   三张语言表长度一致且无重复、所有 `Host*` 调用都在二进制签名表内；
+1. **静态检查**（`tests/test_static.py`）：括号/花括号配平、14 个入口点齐全、
+   三张语言表长度一致且无重复、`STYLE_IDS`/`STYLE_RULES` 等长、所有 `Host*` 调用都在二进制签名表内；
 2. **契约测试**（`tests/`，Python 参考实现 + mock 服务）：校验 spec 解析、
-   四种协议的 URL/头/体构造、响应路径解析、错误码映射；说明见
-   `docs/testing/CONTRACT.md`；
+   `style`/`context`/`deadline`、非对白过滤、四种协议的 URL/头/体构造、
+   响应路径解析、目标语言规则与质量门；说明见 `docs/testing/contract.md`；
 3. **独立审查**（内部记录，未随包发布）：逐 API 对照二进制签名与官方在用插件，
    覆盖语法、逻辑、安全、兼容性、行为回归；
 4. **实机验证**（需用户配合，因会写入 PotPlayer 安装目录）：
@@ -246,7 +291,8 @@ Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预
 ## 10. 非目标
 
 - 不做流式输出、不内置 ASR（语音识别由 PotPlayer 的 Whisper 引擎负责）；
-- 不做术语库、批量翻译整部字幕文件、多语言同时输出；
+- 不做自动术语提取、整片术语表、批量翻译整部字幕文件、多语言同时输出；
+- 风格通过 `style` 显式选择，不做自动题材识别；
 - 不自动上传/同步配置，Key 仅保存在 PotPlayer 本地；
 - 不保证对非 JSON 响应协议的站点（如 Google 网页接口）兼容，这类请用官方插件。
 
@@ -261,9 +307,16 @@ Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预
 5. 若 PotPlayer 未来改变登录框行为，spec 语法需随之调整；
 6. 自定义 API 只支持 JSON 请求/响应；表单编码类接口（如 DeepL 表单版）
    不在支持范围，请使用官方插件；
-7. `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`，无转义机制。
+7. `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`，无转义机制；
+8. 质量门是本地启发式：目标语言为拉丁字母时只能查回显/超长，无法可靠识别
+   "答成另一种拉丁语言"；CJK/阿拉伯/西里尔等脚本只把"明显是拉丁语句"的整句
+   判错（缩写、短专名放行），不区分简繁或具体语种；
+9. 非对白判断只覆盖纯数字/ASCII 标点/常见音乐符号；emoji 或复杂符号仍可能
+   触发一次请求；
+10. `deadline` 限制的是重试与脚本超时预算，不能取消已经发出的同步 HTTP 请求；
+    首次请求本身仍可能接近 `deadline` 才返回。
 
 ## 12. 文案与命名约定
 
 服务商显示名、场景标签（如 `Ollama（本机）`）、术语（API Key、配置串、请求地址）、
-标点与中英空格规则统一写在 `docs/STYLE.md`；`python tools/check_style.py` 做机械检查。
+标点与中英空格规则统一写在 `docs/style.md`，由 review 对照。

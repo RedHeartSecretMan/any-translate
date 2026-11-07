@@ -1,6 +1,6 @@
-<p align="center"><img src="docs/assets/logo.png" width="132" alt="AnyTranslate logo"></p>
+<p align="center"><img src="docs/assets/logo.png" width="132" alt="any-translate logo"></p>
 
-<h1 align="center">AnyTranslate</h1>
+<h1 align="center">any-translate</h1>
 
 <p align="center"><b>PotPlayer 实时字幕翻译插件：一个 <code>.as</code> 文件，接入任意 LLM / JSON 翻译 API。</b></p>
 
@@ -23,11 +23,9 @@
 
 ---
 
-AnyTranslate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译插件：把一条外文字幕交给任意 LLM 或翻译 API，返回一条目标语言字幕。整个插件只有一个 AngelScript 文件，没有安装器依赖，也不需要改源码换服务商。
+any-translate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译插件：把一条外文字幕交给任意 LLM 或翻译 API，返回一条目标语言字幕。整个插件只有一个 AngelScript 文件，无需安装器，也不用改源码换服务商。
 
 内置 OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama 原生和自定义 JSON 五种协议；OpenAI、DeepSeek、Kimi、智谱、通义千问、硅基流动、OpenRouter、Groq、xAI、Mistral、Together、LM Studio、vLLM 等 16 个预设开箱即用，one-api/new-api 等网关和其他接口用一行 `custom|...` 配置接入。
-
-> 仓库名是 **any-translate**；PotPlayer 要求翻译插件文件名为 `SubtitleTranslate - <Name>.as`，因此成品文件保留 `SubtitleTranslate - AnyTranslate` 前缀，菜单显示名由插件内的 `GetTitle()` 决定。
 
 ## 为什么是 any-translate
 
@@ -35,6 +33,7 @@ AnyTranslate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译�
 - **配置只占一行。** 登录框的"用户"字段用 `preset:model` 或 `custom|url|model|opts` 表达，不用编辑文件。
 - **失败要说人话。** 登录时自检 Key 与模型名，按 401/402/404/413/422/429/5xx 给出中文提示，并列出可用模型。
 - **实时场景优先。** 上下文窗口、译文缓存、自动降级、同步 HTTP，都是为 PotPlayer 的单次字幕调用设计的。
+- **按场景选风格。** `style=movie/tv/anime/doc/tech/formal/casual` 给不同题材不同的提示词规则；`context=0..8` 控制前文原文+译文的参考量。
 - **隐私默认。** 不做任何上报，只请求你填写的 URL；Key 只保存在本机。
 
 ## 特性
@@ -43,7 +42,11 @@ AnyTranslate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译�
 | --- | --- |
 | 多协议 | OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama 原生、自定义 JSON |
 | 16 个预设 + custom | 换服务商/模型只改登录框里的一行配置 |
-| 上下文翻译 | 保留最近 4 句原文作为语境，提升指代与术语一致性 |
+| 上下文翻译 | 默认保留最近 4 组原文+译文作为语境，`context=0..8` 可调，提升指代、术语与语气一致性 |
+| 场景风格 | `style=movie/tv/anime/doc/tech/formal/casual`，按题材切换提示词模板 |
+| 译文质量门 | 回显原文、目标文字脚本、超长译文会被拦截并重试一次，失败宁可不显示 |
+| 实时预算 | 单条字幕默认 6 s 总预算，预算内才继续降级/质量重试；`deadline=2000..20000` 可调 |
+| 非对白过滤 | 纯符号、纯数字、音乐符号行不请求 API，原样返回 |
 | 缓存去重 | 相同台词命中缓存（最近 64 条），避免重复请求与计费 |
 | 登录自检 | 按协议探测模型列表，校验 Key 与模型名，失败给出可操作提示 |
 | 自动降级 | 服务端拒绝 `temperature` / `max_tokens` 时改用最小请求体并记住 |
@@ -63,21 +66,21 @@ PotPlayer 安装目录\Extension\Subtitle\Translate\
 
 即 `SubtitleTranslate - AnyTranslate.as` 与 `SubtitleTranslate - AnyTranslate.ico`。
 
-也可以运行仓库根目录的脚本（自动检测安装路径、备份旧文件）：
+也可以运行安装脚本（自动检测安装路径、备份旧文件）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
 卸载：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Uninstall
 ```
 
 ### 2. 启用实时字幕
 
-重启 PotPlayer，右键画面 → **字幕** → **实时字幕翻译** → **实时字幕设置**，勾选"生成有声字幕（实时）"，然后在同一窗口选择翻译插件 **AnyTranslate**。
+重启 PotPlayer，右键画面 → **字幕** → **实时字幕翻译** → **实时字幕设置**，勾选"生成有声字幕（实时）"。然后在同一窗口选择翻译插件 **AnyTranslate**。
 
 ### 3. 登录并配置
 
@@ -100,9 +103,11 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
 
 模型名只是示例，以服务商当前 `/models` 列表为准；填错时登录会提示可用模型。
 
+想按题材调整译文语气，在配置后追加 `|style=anime`、`|style=tech` 等；上下文默认 4 组，可用 `|context=6` 调整。
+
 ### 4. 播放验证
 
-播放带字幕的视频，字幕出现后会在数秒内被替换为目标语言。首次请求可能较慢（云端模型冷启动或本机模型加载）；想看每次请求的状态码与耗时，给配置追加 `|debug=1`。
+播放带字幕的视频，字幕出现后会在几秒内替换为目标语言。首次请求可能较慢（云端模型冷启动或本机模型加载）；想看每次请求的状态码与耗时，给配置追加 `|debug=1`。
 
 ## 配置语法
 
@@ -116,12 +121,12 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 - `preset` 不区分大小写；`model` 只按**第一个** `:` 切分，所以 `ollama:qwen3:4b` 合法。
 - 任意 spec 都可以在结尾用 `|` 追加 opts（预设与 custom 都支持）。
 - `custom` 的 `endpoint_url` 是完整请求地址，不再追加协议路径。
-- `opts` 用 `;` 分隔、`=` 赋值；可用：`path`、`auth`、`keyname`、`body`、`temp`、`max_tokens`、`minimal`、`version`、`probe`、`debug`。
+- `opts` 用 `;` 分隔、`=` 赋值；可用：`path`、`auth`、`keyname`、`body`、`temp`、`max_tokens`、`minimal`、`version`、`probe`、`debug`、`style`、`context`、`deadline`。
 - `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`（没有转义机制）。
 - `auth=query` 会把 Key 拼进 URL（参数名 `keyname`，默认 `key`）；能走请求头就别用 query，Key 会出现在代理/网关日志里。`auth=query` 只对支持 URL 鉴权的服务有意义（Gemini、部分自定义网关）；OpenAI / Anthropic 官方接口不接受 query 鉴权，会以 401 明确失败。
 - 密码框留空时沿用上次保存的 Key；用户框留空时沿用上次保存的 spec。
 
-### custom 选项
+### 常用选项
 
 | 选项 | 含义 | 默认 |
 | --- | --- | --- |
@@ -135,8 +140,35 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 | `version` | Anthropic `anthropic-version` 头 | `2023-06-01` |
 | `probe` | 登录自检 `models` / `none` | `none` |
 | `debug` | `1` = 打开诊断控制台 | `0` |
+| `style` | 翻译风格：`movie` / `tv` / `anime` / `doc` / `tech` / `formal` / `casual` | `movie` |
+| `context` | 最近原文+译文组数，`0..8` | `4` |
+| `deadline` | 单条字幕总预算（毫秒），`2000..20000` | `6000` |
 
 注意各选项的生效范围：`body` 只对 `custom` 生效；`path`/`auth`/`keyname`/`probe` 对任意 spec 生效；`version` 只对 Anthropic 请求头生效；`probe=models` 只对预设生效（`custom` 登录不做自检）。
+
+### 翻译风格
+
+`style` 只影响提示词，不改变请求协议；默认 `movie`：
+
+| style | 适用题材 | 提示词侧重 |
+| --- | --- | --- |
+| `movie` | 电影、通用影视 | 自然口语，贴近人物说话方式 |
+| `tv` | 电视剧、连续剧 | 前后场景称呼与语气一致 |
+| `anime` | 动画、番剧 | 保留语气词与角色口吻，日式专名统一 |
+| `doc` | 纪录片 | 正式书面，术语使用通用译名 |
+| `tech` | 技术、教程 | 术语准确，缩写保留原文 |
+| `formal` | 正式场合、商务 | 敬语、完整句，避免俚语 |
+| `casual` | 日常、口语内容 | 短句、生活化，保留俚语语气 |
+
+`context` 控制送给模型的最近原文+译文组数（0-8，默认 4）；设为 `0` 可关闭上下文。示例：
+
+```text
+deepseek:deepseek-v4-flash|style=anime;context=6;deadline=5000
+```
+
+`deadline` 是单条字幕的总预算（毫秒），默认 6000。预算用完后不再发起 400 降级、空响应重试、429/5xx 重试或质量重试；慢模型/推理模型可调高到 20000。
+
+风格/上下文变化会自动清空当前上下文与缓存，避免把旧风格的译文当成参考。
 
 ### 自定义接口例子
 
@@ -190,11 +222,13 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 | 登录提示 404/405 | 一般不会出现：预设服务没有 `/models` 时插件会跳过模型校验。若出现，按提示检查地址。 |
 | 登录提示 429 | 限流，稍后再试。 |
 | 登录提示"未找到模型" | 按提示列表里的可用模型改 `preset:model`。 |
-| 有一个原文没有译文 | 运行期失败是静默的。重新登录看自检结果；或加 `debug=1`（如 `deepseek:deepseek-v4-flash|debug=1`）后看控制台状态码与耗时。 |
+| 个别字幕没有译文 | 运行期失败是静默的。重新登录看自检结果；或加 `debug=1`（如 `deepseek:deepseek-v4-flash|debug=1`）后看控制台状态码与耗时。 |
 | 登录失败后突然都不翻译了 | 登录自检失败会置"已登出"状态，避免用错误配置逐行请求；重新登录成功即恢复。 |
+| `debug=1` 显示 `skip translate` | 目标语言为空/Auto、已登出，或 base URL 为空。先选明确目标语言并重新登录。 |
 | 400 但登录正常 | 模型不接受 `temperature`/`max_tokens`；插件会自动降级，若仍失败请确认模型名。 |
-| 延迟很高 | 云端推理模型会先思考；换非推理模型，或确认预设已关闭思考。Ollama（本机）首次加载模型也要几十秒，可先手动 `ollama run` 预热。 |
-| 翻译串味/不连贯 | 上下文只有 4 句；暂停超过 2 分钟会自动清空。 |
+| 延迟很高 | 云端推理模型会先思考；换用非推理模型，或确认预设已关闭思考。本机模型首次加载也要时间；可把 `deadline` 调高或先预热。 |
+| 译文串味或不连贯 | 默认上下文 4 组；可调 `context=0..8`，暂停超过 2 分钟会自动清空。 |
+| 译文过长/回显原文/答错语言 | 插件会拦截并重试一次；仍不合格会留空，`debug=1` 可看到 `validation failed` 原因。 |
 
 调试示例：`deepseek:deepseek-v4-flash|debug=1`。高级选项（`path`、`body`、`minimal`、`temp` 等）可以加在任意 spec 的 `|` 之后；`custom|...|...|opts` 也支持同样的 opts 语法。
 
@@ -202,7 +236,8 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 
 - 单条字幕的输入约 100-250 tokens，输出 10-80 tokens。
 - 本机小模型 200-800 ms；国内云非推理模型 0.3-1.0 s；海外/代理 0.8-3 s；推理模型 2-30 s。
-- 缓存可挡掉重复台词；上下文 4 句是可调常量（源码 `MAX_HISTORY`）。
+- 缓存可挡掉重复台词；上下文默认 4 组原文+译文，可用 `context=0..8` 调整（源码上限 `MAX_HISTORY=8`）。
+- 单条字幕默认 6 秒总预算；预算内才会继续重试，避免拖住后续字幕。
 - 每 1000 条字幕成本量级：¥0.01-0.5，随模型价差很大。
 
 ## 隐私与安全
@@ -219,78 +254,50 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 - 同步 HTTP：一次只能翻译一条字幕，没有流式输出（PotPlayer 插件接口只接受一次性返回值）。
 - 自定义接口只支持 JSON 请求/响应；表单编码接口（如 DeepL 表单版）请用官方插件。
 - `path` 下标只支持单层 0-9，不支持 `[10]` 和多层嵌套下标。
-- 不使用线程/timer；极慢的请求（>20 s）会受 PotPlayer 脚本超时限制。
+- 不使用线程/timer；单条字幕受 `deadline` 总预算限制（默认 6 s，最大 20 s），慢模型可能来不及返回。
 - 82 种语言是常用集，不是完整 ISO 列表；可在源码语言表里扩展。
+- `context` 最多 8 组；风格只通过提示词模板切换，不做自动题材识别。
+- 不做自动术语提取/整片术语表；需要统一专名时，用 `style` + 上下文维持一致。
 - 请求前会剔除 JSON 不允许的 C0 控制字符（`\b`/`\f` 等），不转义保留。
 - `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`（spec 语法无转义）。
-- 插件尚未在全部 PotPlayer 版本上实机验证，兼容性记录见 `docs/VERIFICATION.md`。
+- 插件尚未在全部 PotPlayer 版本上实机验证，兼容性记录见 `docs/verification.md`。
 
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
-| [DESIGN](docs/DESIGN.md) | 设计契约：宿主 API 可行性、配置语法、协议适配、错误处理、性能取舍 |
-| [STYLE](docs/STYLE.md) | 文案与命名约定：服务商标签、术语、标点与中英空格 |
+| [design](docs/design.md) | 设计契约：宿主 API 可行性、配置语法、协议适配、错误处理、性能取舍 |
+| [style](docs/style.md) | 文案与命名约定：服务商标签、术语、标点与中英空格 |
 | [providers](docs/providers.md) | 各服务商的 HTTP 契约、鉴权头、请求/响应差异 |
-| [VERIFICATION](docs/VERIFICATION.md) | 验证证据、未覆盖范围、复跑命令、实机验证清单 |
-| [CONTRACT](docs/testing/CONTRACT.md) | 契约测试说明与边界决策 |
-| [ANGELSCRIPT-VALIDATION](docs/testing/ANGELSCRIPT-VALIDATION.md) | AngelScript 校验工具链调研 |
+| [verification](docs/verification.md) | 验证证据、未覆盖范围、复跑命令、实机验证清单 |
+| [contract](docs/testing/contract.md) | 契约测试说明与边界决策 |
+| [angelscript-validation](docs/testing/angelscript-validation.md) | AngelScript 校验工具链调研 |
 | [CHANGELOG](CHANGELOG.md) | 版本变更记录 |
 
 ## 开发与验证
 
-AngelScript 无法在本机直接执行，本项目按四层验证（本地检查需要 Python 3.10+；CI 使用 3.12）：
+AngelScript 无法在本机直接执行，本项目按三层验证（本地检查需要 Python 3.10 或更高；CI 使用 3.12）：
 
 ```powershell
 # 1. 静态检查：括号配平、入口点、语言表/预设表长度、Host API 是否真实存在
-python tools/check_as.py
+python -m unittest tests.test_static -v
 
-# 2. 契约测试：Python 参考实现 + 本机 mock 服务（208 用例）
+# 2. 契约测试：py_compile + mock 冒烟 + unittest（216 用例，含静态检查）
 powershell -ExecutionPolicy Bypass -File tests\run_tests.ps1
-# Windows PowerShell 5.1 与 PowerShell 7 均可；PATH 中没有 python 时加 -Python <path>
+# PATH 中没有 python 时加 -Python <path>
 
-# 3. 文档样式：服务商命名、术语、中文与英文/数字之间的空格
-python tools/check_style.py
-
-# 4. 实机：复制插件 → 重启 PotPlayer → 登录 → 播放带字幕视频
+# 3. 实机：复制插件 → 重启 PotPlayer → 登录 → 播放带字幕视频
 ```
 
-`tools/check_as.py` 默认使用仓库内的 `docs/api-signatures.txt`（从 `PotPlayer64.dll` 提取的 104 条签名）校验 Host API，也可用 `--api-doc` 指向本机 `Extension\api.txt`。CI（`.github/workflows/ci.yml`）在 Windows runner 上运行同样的检查。
+`tests/test_static.py` 默认使用仓库内的 `docs/api-signatures.txt`（从 `PotPlayer64.dll` 提取的 104 条签名）校验 Host API；在装有 PotPlayer 的 Windows 上还会尝试自动探测 `Extension\api.txt`。CI（`.github/workflows/ci.yml`）在 Windows runner 上运行同样的检查。
 
-验证证据与未覆盖范围见 [VERIFICATION](docs/VERIFICATION.md)，文案约定见 [STYLE](docs/STYLE.md)。
-
-## 目录结构
-
-```text
-plugin/                      插件成品（复制到 PotPlayer 即可）
-  SubtitleTranslate - AnyTranslate.as
-  SubtitleTranslate - AnyTranslate.ico
-docs/
-  assets/logo.png            品牌图标（512px PNG）
-  DESIGN.md                  设计与契约
-  STYLE.md                   文案与命名约定
-  providers.md               各服务 HTTP 契约资料
-  api-signatures.txt         从 PotPlayer64.dll 提取的 API 签名
-  VERIFICATION.md            验证证据、未覆盖范围、复跑命令
-  testing/
-    CONTRACT.md              契约测试说明与边界决策
-    ANGELSCRIPT-VALIDATION.md  AngelScript 校验工具链调研
-tests/                       契约测试代码（208 用例）与 mock 服务
-tools/                       静态检查与样式检查
-install.ps1                  安装/卸载脚本
-.github/workflows/ci.yml     Windows CI
-README.md
-CHANGELOG.md
-LICENSE
-```
+验证证据与未覆盖范围见 [verification](docs/verification.md)，文案约定见 [style](docs/style.md)，测试布局见 [tests/README.md](tests/README.md)。
 
 ## 致谢
 
-- PotPlayer 扩展 API 与官方随包插件提供了 `Host*` 函数与插件文件约定的先例。
+- PotPlayer 扩展 API 文档与随包插件提供了 `Host*` 函数和插件文件约定的先例。
 - 协议契约参考各服务商公开文档，汇总在 [providers](docs/providers.md)。
 
 ## 许可
 
 [MIT](LICENSE) 版权所有 (c) 2026 RedHeartSecretMan
-
-运行时只访问你在配置里填写的 API 地址；各服务商的使用条款、计费和数据处理政策由使用者自行确认。

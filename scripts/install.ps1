@@ -1,9 +1,9 @@
 ﻿# AnyTranslate installer for the PotPlayer subtitle translation plugin.
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File .\install.ps1
-#   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
-#   powershell -ExecutionPolicy Bypass -File .\install.ps1 -PotPlayerDir "D:\PotPlayer"
-#   powershell -ExecutionPolicy Bypass -File .\install.ps1 -DryRun
+#   powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+#   powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Uninstall
+#   powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -PotPlayerDir "D:\PotPlayer"
+#   powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -DryRun
 
 param(
     [string]$PotPlayerDir = "",
@@ -16,8 +16,9 @@ $ErrorActionPreference = "Stop"
 # PotPlayer requires this exact plugin file name; the menu label comes from GetTitle().
 $PluginName = "SubtitleTranslate - AnyTranslate"
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$pluginFile = Join-Path $scriptRoot "plugin\$PluginName.as"
-$iconFile = Join-Path $scriptRoot "plugin\$PluginName.ico"
+$projectRoot = Split-Path -Parent $scriptRoot
+$pluginFile = Join-Path $projectRoot "plugin\$PluginName.as"
+$iconFile = Join-Path $projectRoot "plugin\$PluginName.ico"
 
 function Test-PotPlayerDir([string]$Dir) {
     if (-not $Dir) { return $false }
@@ -96,7 +97,7 @@ if ($Uninstall) {
 }
 
 if (-not (Test-Path $pluginFile)) {
-    throw "插件文件不存在: $pluginFile （请确认在仓库根目录运行）"
+    throw "插件文件不存在: $pluginFile （请确认仓库完整）"
 }
 
 $proc = Get-Process -Name "PotPlayerMini64", "PotPlayer64" -ErrorAction SilentlyContinue

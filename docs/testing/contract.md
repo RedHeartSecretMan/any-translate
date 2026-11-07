@@ -1,15 +1,15 @@
 # 契约测试说明与边界决策
 
-> 位置：`docs/testing/CONTRACT.md` ｜ 对应代码：`tests/` ｜ 随 `.as` 契约变更同步
+> 位置：`docs/testing/contract.md` ｜ 对应代码：`tests/` ｜ 随 `.as` 契约变更同步
 >
-> **契约唯一事实来源：`plugin/SubtitleTranslate - AnyTranslate.as` + `docs/DESIGN.md`。**
-> 当本文件描述与 `.as` 冲突时，以 `.as` 实现与 `docs/DESIGN.md` 为准。
-> `tests/ref_impl.py` 逐函数镜像 `.as`，`tests/test_contract.py` 断言契约，
-> `tests/mock_server.py` 在网络上复现契约；三者与 `.as` 的对应关系见 §7。
+> **契约唯一事实来源：`plugin/SubtitleTranslate - AnyTranslate.as` + `docs/design.md`。**
+> 当本文件描述与 `.as` 冲突时，以 `.as` 实现与 `docs/design.md` 为准。
+> `tests/support/reference_impl.py` 逐函数镜像 `.as`，`tests/test_contract.py` 断言契约，
+> `tests/support/mock_server.py` 在网络上复现契约；三者与 `.as` 的对应关系见 §7。
 
-- `ref` = `tests/ref_impl.py`（Python 参考实现）
+- `ref` = `tests/support/reference_impl.py`（Python 参考实现）
 - `.as` = `plugin/SubtitleTranslate - AnyTranslate.as`（行号随迭代漂移，**以函数名为准**）
-- `DESIGN.md` = `docs/DESIGN.md`（实现契约文档）
+- design = `docs/design.md`（实现契约文档）
 
 ---
 
@@ -17,12 +17,12 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `tests/mock_server.py` | 单进程 mock LLM 服务（仅标准库）；记录请求供断言 |
-| `tests/ref_impl.py` | Python 参考实现：`parse_spec` / `build_request` / `parse_response` / `clean_text` / `login` / `probe` 等，**永不抛异常**，统一返回 `(ok, payload\|Err)` |
-| `tests/test_contract.py` | 原生 unittest，**208 个用例**（含 subTest 合计 1100+ 条断言） |
+| `tests/support/mock_server.py` | 单进程 mock LLM 服务（仅标准库）；记录请求供断言 |
+| `tests/support/reference_impl.py` | Python 参考实现：`parse_spec` / `build_request` / `parse_response` / `clean_text` / `login` / `probe` 等，**永不抛异常**，统一返回 `(ok, payload\|Err)` |
+| `tests/test_contract.py` | 原生 unittest，**215 个用例**（含 subTest 合计 1100+ 条断言） |
 | `tests/run_tests.ps1` | 一键运行：py_compile → 独立 mock 冒烟 → unittest → 摘要 |
-| `docs/testing/CONTRACT.md` | 本文件 |
-| `docs/testing/ANGELSCRIPT-VALIDATION.md` | AngelScript 校验工具链调研 |
+| `docs/testing/contract.md` | 本文件 |
+| `docs/testing/angelscript-validation.md` | AngelScript 校验工具链调研 |
 
 ```powershell
 # 一键运行
@@ -32,9 +32,9 @@ pwsh -File tests/run_tests.ps1
 python -m unittest discover -s tests -v
 
 # 单独启动 mock（默认 18080；--port 0 为随机端口）
-python tests/mock_server.py --port 18080
-python tests/mock_server.py --port 18080 --scenario 401
-python tests/mock_server.py --port 18080 --scenario 405   # 模拟 /models 未实现（登录放行）
+python tests/support/mock_server.py --port 18080
+python tests/support/mock_server.py --port 18080 --scenario 401
+python tests/support/mock_server.py --port 18080 --scenario 405   # 模拟 /models 未实现（登录放行）
 ```
 
 Python 解释器使用 PATH 中的 `python`（3.10+，契约测试只用标准库）；也可用
@@ -64,7 +64,7 @@ Python 解释器使用 PATH 中的 `python`（3.10+，契约测试只用标准�
   `OPENAI_TEXT`、`OPENAI_ARRAY_PARTS`、`ANTHROPIC_PARTS`、`GEMINI_PARTS`、
   `OLLAMA_TEXT`、`CUSTOM_TEXTS`。
 
-## 3. 契约矩阵（与 `.as` / DESIGN.md 对齐）
+## 3. 契约矩阵（与 `.as` / design.md 对齐）
 
 ### 3.1 login User 字段语法
 
@@ -72,7 +72,7 @@ Python 解释器使用 PATH 中的 `python`（3.10+，契约测试只用标准�
 spec   := preset [":" model] ["|" opts]
         | "custom" "|" url ["|" model ["|" opts]]
 opts   := kv (";" kv)*        kv := key "=" value
-keys   := path | auth | keyname | body | temp | max_tokens | probe | debug | version | minimal
+keys   := path | auth | keyname | body | temp | max_tokens | probe | debug | version | minimal | style | context | deadline
 auth   := bearer | x-api-key | query | none
 ```
 
@@ -85,9 +85,12 @@ auth   := bearer | x-api-key | query | none
 - custom 的 url 是**完整请求地址**（不再追加协议路径）；model 可省略。
 - preset 名大小写不敏感；`custom|` 前缀大小写敏感（`.as` 用 `StartsWith`）。
 - opts 容错（镜像 `.as`）：缺 `=` / key 为空 / 未知 key 的片段**静默跳过**；
-  `temp` 删除非 `[0-9.]` 字符后为空则回退 0.2；`max_tokens` 只保留数字，
-  为空则不发送；`debug` / `minimal` 仅 `1` 或 `true` 为真；`version` 原样透传。
-- 非法值报错（与 `.as` 文案一致）：未知服务商、custom 缺 URL、auth 取值非法。
+  `temp` 删除非 `[0-9.]` 字符后为空则回退 0.2，`.5`→`0.5`、`1.`→`1`；
+  `max_tokens` 只保留数字，为空则不发送；`debug` / `minimal` 仅 `1` 或 `true` 为真；
+  `version` 原样透传；`context` 只取数字并夹到 0..8；`style` 默认 `movie`；
+  `deadline` 只取数字并夹到 2000..20000，默认 6000。
+- 非法值报错（与 `.as` 文案一致）：未知服务商、custom 缺 URL、auth 取值非法、
+  style 不在 `movie/tv/anime/doc/tech/formal/casual` 内。
 
 ### 3.2 provider 预设（base / 默认模型 / 协议 / 鉴权）
 
@@ -195,10 +198,10 @@ gemini `candidates[0].content.parts`、ollama `message.content`、custom
 ### 3.6 clean_text（镜像 `CleanTranslation` / `StripKnownPrefixes`）
 
 顺序：trim → 若以 ``` 开头去掉到第一个换行 → 若以 ``` 结尾去掉后 3 字符 →
-trim → 去常见前缀（15 项表，最多 3 轮）→ `原文：/Original:` 去掉首行 →
+trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 去掉首行 →
 去整体包裹的成对引号（`""` `“”` `「」` `『』`）→ CRLF/CR 规范化 →
-`<br/>`/`<br />`/`<br>` 转换行 → `\n\n\n` → `\n\n` → RTL（ar/he/fa/ur）
-前置 U+202B → trim。
+`<br/>`/`<br />`/`<br>` 转换行 → `\n\n\n` → `\n\n` → RTL（ar/he/fa/ur，
+按 `L_LABEL`→`L_CODE`，含本地化标签）前置 U+202B → trim。
 
 注意：`Here is the translation:` **不在** `.as` 前缀表中，不会被去掉；
 `<BR>`（大写）不会被替换；`.as` 只把 3 连换行压成 2 连，不是无限压缩。
@@ -223,7 +226,7 @@ trim → 去常见前缀（15 项表，最多 3 轮）→ `原文：/Original:` 
 
 ## 4. JSON 转义与日志脱敏（`.as` 对齐）
 
-`ref_impl.json_escape` 镜像 `.as::JsonEscape`（`.as` 用 `StripChars` 循环剔除，
+`reference_impl.json_escape` 镜像 `.as::JsonEscape`（`.as` 用 `StripChars` 循环剔除，
 上限 1024 次）：
 
 1. **剔除 C0 控制字符（`\t` / `\n` / `\r` 除外）**：删除 `\x00-\x08`、
@@ -248,7 +251,7 @@ trim → 去常见前缀（15 项表，最多 3 轮）→ `原文：/Original:` 
 
 ## 5. E 列表：与 `.as` 的差异处理结果（按当前实现对齐后）
 
-图例：✅ resolved/tests aligned = ref 与用例已按 `.as` + DESIGN.md 对齐并通过；
+图例：✅ resolved/tests aligned = ref 与用例已按 `.as` + design.md 对齐并通过；
 📌 保留差异（已文档化，非冲突）；⏳ 不在本测试范围。
 
 | # | 主题 | 对齐结果 | 状态 |
@@ -257,13 +260,13 @@ trim → 去常见前缀（15 项表，最多 3 轮）→ `原文：/Original:` 
 | E-02 | Gemini Key 位置 | 以 `.as` 为准：`x-goog-api-key` 请求头，Key 不进 URL | ✅ resolved |
 | E-03 | 只写 preset 的 model | 用 `P_MODEL` 预设默认模型（17 项，DESIGN §5.1） | ✅ resolved |
 | E-04 | Anthropic `max_tokens` | 默认 1024，可 `max_tokens=` 覆盖 | ✅ resolved |
-| E-05 | 默认 temperature | 0.2（`temp=` 可覆盖，非法字符清除后回退 0.2） | ✅ resolved |
+| E-05 | 默认 temperature | 0.2（`temp=` 可覆盖，非法字符清除后回退 0.2；`.5`→`0.5`、`1.`→`1`） | ✅ resolved |
 | E-06 | 数组/多文本块拼接 | 用 `\n` 连接非空项（Anthropic 多块=多段） | ✅ resolved |
 | E-07 | 请求体厂商扩展字段 | `P_EXTRA` 的 deepseek/qwen/siliconflow 关思考字段 + Gemini generationConfig | ✅ resolved |
 | E-08 | 额外请求头 | 所有请求（含 probe）统一带 `Accept: application/json` | ✅ resolved |
 | E-09 | opts 扩展 | 任意 spec 支持 opts（竖线分隔）；新增 `max_tokens`/`version`/`minimal`；body 占位符 `{{prompt}}{{text}}{{model}}{{src}}{{dst}}` | ✅ resolved |
 | E-10 | 登录自检 | probe 默认、404/405 放行、Key 必填、模型名匹配、custom 不探测 | ✅ resolved |
-| E-11 | 重试策略 | `.as` 的 400/空响应/429/5xx 重试属增强；单请求 mock 无法断言次数，测试不覆盖 | ⏳ out of scope |
+| E-11 | 重试策略 | `.as` 的 400/空响应/429/5xx/质量重试都受单条 `deadline` 预算约束；单请求 mock 无法断言次数，测试不覆盖。质量门判定由 `validate_translation` 单测覆盖 | ⏳ out of scope（次数） |
 | E-12 | clean_text 细节 | 前缀表/去包裹引号/换行压缩/`<br>` 均按 `.as` 对齐 | ✅ resolved |
 | E-13 | 错误呈现方式 | ref 用稳定错误码 + `Err.detail` 供断言；`.as` 返回空串 + `ErrorHint` Dbg，不向字幕混入错误文案（DESIGN §4） | 📌 interface difference |
 | E-14 | lmstudio/vllm 认证 | auth=none，无需 Key（`P_AUTH`） | ✅ resolved |
@@ -283,7 +286,7 @@ trim → 去常见前缀（15 项表，最多 3 轮）→ `原文：/Original:` 
 | D-04 | custom 任意 scheme | `.as` 不校验 URL scheme，ref 同样接受（运行期由 HTTP 层失败） | aligned |
 | D-05 | opts 容错 | 缺 `=`/空 key/未知 key 静默跳过；重复 key 后者覆盖；值内允许 `|`（custom opts） | aligned |
 | D-06 | 非法 auth | 报 `bad_opts`，文案与 `.as` 一致 | aligned |
-| D-07 | temp/max_tokens 清洗 | 非数字字符删除；temp 空→0.2；max_tokens 空→不发送 | aligned |
+| D-07 | temp/max_tokens 清洗 | 非数字字符删除；temp 空/多小数点→0.2，`.5`→0.5、`1.`→1；max_tokens 空→不发送 | aligned |
 | D-08 | probe 取值 | `.as` 不校验，只要不是 `none` 就自检 | aligned |
 | D-09 | path 覆盖范围 | 任意 spec 可用 `path=` 覆盖默认提取路径 | aligned |
 | D-10 | 路径下标 | 0-9 单数字；根数组 `[0].text` 支持 | aligned |
@@ -295,9 +298,9 @@ trim → 去常见前缀（15 项表，最多 3 轮）→ `原文：/Original:` 
 | D-16 | 空 Key 认证头 | 不发认证头（含 anthropic-version）；登录期另行校验 Key 必填 | aligned |
 | D-17 | auth=query 编码 | URL encode；日志经 SafeUrl 脱敏 | aligned |
 | D-18 | JSON 控制字符 | 删除 C0（除 \t\n\r）而非转义（同 `.as`） | aligned |
-| D-19 | clean_text 前缀 | 采用 `.as` 15 项前缀表；不处理 “Here is the translation:” | aligned |
+| D-19 | clean_text 前缀 | 采用 `.as` 14 项前缀表；不处理 “Here is the translation:” | aligned |
 | D-20 | 包裹引号 | 成对引号整体去除（`""`/`“”`/`「」`/`『』`） | aligned |
-| D-21 | prompt 措辞 | 不属契约；tests 只断言结构（含目标语言/原文在末尾）；`.as BuildPrompt` 更完整 | free |
+| D-21 | prompt 措辞 | 不逐字属契约；tests 断言结构、风格块、语言规则、上下文块、原文位置与结尾约束；`.as BuildPrompt` 与 ref 结构对齐 | free |
 | D-22 | 402/413/422 | 单列错误码，与 `.as` Probe/ErrorHint 对齐 | aligned |
 | D-23 | 登录持久化 | `ServerLogin` 空 spec/空 Key 沿用保存值；ref 纯函数用默认值，持久化不测 | out of scope |
 | D-24 | 模板 JSON 校验 | ref 额外校验（E-16） | ref stricter |
@@ -308,6 +311,9 @@ trim → 去常见前缀（15 项表，最多 3 轮）→ `原文：/Original:` 
 | D-29 | MaskKey 阈值 | 长度 <16 → `****`；≥16 才显示前4/后4 | aligned |
 | D-30 | JsonEscape C0 | 剔除 C0（`\t\n\r` 除外），`\b`/`\f` 也剔除而非转义；`StripChars` 上限 1024 | aligned |
 | D-31 | 404 文案 | `ErrorHint` 404 = “接口地址或模型不存在”；ref 稳定文案含同一短语 | aligned |
+| D-32 | style/context/deadline | `style` 默认 `movie`，非法值报 `bad_opts`；`context` 默认 4、夹到 0..8；`deadline` 默认 6000、夹到 2000..20000；三者都参与运行时行为，不改变 HTTP 协议 | aligned |
+| D-33 | 译文质量门 | `validate_translation` 返回 `empty` / `echo` / `wrong_script` / `too_long`；`validation_reason_zh` 提供重试提示中文原因；拉丁短名/缩写放行 | ref abstraction |
+| D-34 | 非对白过滤 | 纯符号/数字/音乐符号行由 `is_non_dialogue_text` 判定，本地原样返回，不请求 API | ref abstraction |
 
 ## 7. 人工交叉核对清单（`.as` ↔ tests）
 
@@ -337,31 +343,37 @@ trim → 去常见前缀（15 项表，最多 3 轮）→ `原文：/Original:` 
    思考块跳过、根数组、单数字下标、reasoning-only 判定、清洗。
 7. **清洗**：`clean_text`/`strip_known_prefixes` ↔ `CleanTranslation`/
    `StripKnownPrefixes`；对照 `TestCleanText.test_clean_text_cases`。
-8. **错误**：`_status_error` 稳定文案 ↔ `SendOnce` 状态判断 + `ErrorHint` 语义；
+8. **提示词/质量门**：`build_prompt`/`validate_translation`/`validation_reason_zh`/
+   `target_rules`/`is_non_dialogue_text` ↔ `BuildPrompt`/`ValidateTranslation`/
+   `ValidationReasonZh`/`TargetRules`/`IsNonDialogueText`；对照 `test_build_prompt_*`、
+   `test_validate_translation`、`test_non_dialogue_filter`、`test_target_rules`。
+9. **错误**：`_status_error` 稳定文案 ↔ `SendOnce` 状态判断 + `ErrorHint` 语义；
    对照 `test_status_code_mapping_is_stable_chinese` 与 `ErrorHint` 分支
    （400/401/402/403/404/413/422/429/5xx）。
-9. **模型列表/登录**：`build_probe_request`/`parse_models_response`/
-   `model_matched`/`login` ↔ `ProbeUrl`/`Probe`/`ParseModels`/`ModelMatched`/
-   `ServerLogin`；对照 `TestProbeAndLoginUnit` + `TestMockServerE2E` 登录用例
-   （404/405 放行、401/429/500 文案、大小写、ollama tag 前缀、custom 不探测、
-   `auth=query` 时 probe URL 带 `?key=` 且无认证头）。
-10. **脱敏**：`safe_url`/`mask_key`/`host_url_encode` ↔ `SafeUrl`/`MaskKey`/`HostUrlEncode`；
+10. **模型列表/登录**：`build_probe_request`/`parse_models_response`/
+    `model_matched`/`login` ↔ `ProbeUrl`/`Probe`/`ParseModels`/`ModelMatched`/
+    `ServerLogin`；对照 `TestProbeAndLoginUnit` + `TestMockServerE2E` 登录用例
+    （404/405 放行、401/429/500 文案、大小写、ollama tag 前缀、custom 不探测、
+    `auth=query` 时 probe URL 带 `?key=` 且无认证头）。
+11. **脱敏**：`safe_url`/`mask_key`/`host_url_encode` ↔ `SafeUrl`/`MaskKey`/`HostUrlEncode`；
     `test_safe_url_masks_encoded_and_raw_key`、`test_mask_key`（9/15/16 位边界）。
-11. **入口函数**：`GetTitle/GetVersion/ServerLogin/Translate/...` 与
-    `tools/check_as.py` 的入口检查对齐（该工具已覆盖）。
+12. **入口函数**：`GetTitle/GetVersion/ServerLogin/Translate/...` 与
+    `tests/test_static.py` 的入口检查对齐（该工具已覆盖）。
 
-## 8. 下次同步清单（`.as` 或 DESIGN.md 再变更时）
+## 8. 下次同步清单（`.as` 或 design.md 再变更时）
 
-> 任何人修改 `.as` 的以下任一处，都必须同步更新 `tests/ref_impl.py` +
-> `tests/test_contract.py` + `tests/mock_server.py`（如涉及）+ 本文件，并跑
-> `pwsh -File tests/run_tests.ps1` 与 `python tools/check_as.py`。
+> 任何人修改 `.as` 的以下任一处，都必须同步更新 `tests/support/reference_impl.py` +
+> `tests/test_contract.py` + `tests/support/mock_server.py`（如涉及）+ 本文件，并跑
+> `pwsh -File tests/run_tests.ps1` 与 `python -m unittest tests.test_static -v`。
 
 1. 预设表 7 列（`P_ID/P_BASE/P_MODEL/P_PROTO/P_AUTH/P_KEYNAME/P_EXTRA`）任一项；
 2. 默认常量：`DEFAULT_SPEC`、默认 temperature、anthropic `max_tokens`/`version`；
-3. `ParseSpec` 语法或 opts key 集合/容错规则/错误文案；
+3. `ParseSpec` 语法或 opts key 集合/容错规则/错误文案（含 `style`/`context`/`deadline`）；
 4. `BuildUrl`/`BuildHeaders`/`BuildBody` 任一分支（URL 后缀、认证头、minimal、
    max_tokens 映射、厂商扩展字段、body 模板占位符）；
-5. `ProbeUrl`/`Probe`/`ServerLogin`（探测路径、404/405 放行规则、Key/模型前置
+5. `BuildPrompt`/`ValidateTranslation`/`TargetRules`/`IsNonDialogueText`（风格模板、
+   语言规则、上下文块、质量门、非对白过滤）；
+6. `ProbeUrl`/`Probe`/`ServerLogin`（探测路径、404/405 放行规则、Key/模型前置
    校验、错误文案）；
 6. `ExtractByPath`/`WalkPath`/`NodeText`（默认 path、`[n]` 规则、数组分隔符、
    思考块 type 集合、对象取值顺序）；
@@ -370,14 +382,15 @@ trim → 去常见前缀（15 项表，最多 3 轮）→ `原文：/Original:` 
    的脱敏顺序、MaskKey 阈值 <16）；
 9. 新增协议/预设：同步 mock 路由与 `problems` 契约校验、DESIGN §5/§6、本文件 §3；
 10. 回归命令：`pwsh -File tests/run_tests.ps1`（含独立 mock 冒烟）+
-    `python tools/check_as.py` + 人工按 §7 抽查。
+    `python -m unittest tests.test_static -v` + 人工按 §7 抽查。
 
 ## 9. 未覆盖范围
 
-- 不执行/编译 AngelScript（见 `ANGELSCRIPT-VALIDATION.md`）；`.as` 语法与
+- 不执行/编译 AngelScript（见 `angelscript-validation.md`）；`.as` 语法与
   PotPlayer 运行时行为需实机验证。
 - `.as` 的重试策略、上下文滑动窗口、缓存、暂停重置、语言表映射、登录持久化、
-  UI 文案不在契约测试范围（E-11/E-18、D-23）。
+  UI 文案不在契约测试范围（E-11/E-18、D-23）；质量门的判定函数由
+  `validate_translation` 单测覆盖，但"哪次请求触发重试"仍属状态行为。
 - PotPlayer `HostOpenHTTP`/`HostGetStatusHTTP` 的超时单位与编码行为属宿主行为，
   ref 用 urllib 模拟。
 - 真实供应商 API 未调用（全部走 mock，不产生费用、不依赖外网）。
@@ -386,6 +399,6 @@ trim → 去常见前缀（15 项表，最多 3 轮）→ `原文：/Original:` 
 
 ---
 
-最后更新：2026-11-07（P1 修复后回归：SafeUrl 编码脱敏 / auth=query 归一化与
-Probe 共用 AppendQueryAuth / MaskKey <16 / ErrorHint 404 / JsonEscape 剔除 C0；
-208 用例全部通过，`run_tests.ps1` 一键 PASS）。
+最后更新：2026-11-07（0.1.0：style/context/deadline、目标语言规则、译文质量门、
+非对白过滤；同时回归 SafeUrl 编码脱敏 / auth=query 归一化 / MaskKey <16 /
+ErrorHint 404 / JsonEscape 剔除 C0；216 用例全部通过，`run_tests.ps1` 一键 PASS）。

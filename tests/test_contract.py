@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """AnyTranslate 插件契约测试（原生 unittest，仅标准库，不依赖第三方包）。
 
-**契约唯一事实来源**：`plugin/SubtitleTranslate - AnyTranslate.as` + `docs/DESIGN.md`。
+**契约唯一事实来源**：`plugin/SubtitleTranslate - AnyTranslate.as` + `docs/design.md`。
 本文件把“login User 配置语法 -> HTTP 请求 -> 响应解析 -> 登录自检”的契约钉死，
-供人工把 `tests/ref_impl.py` 的断言逐条映射回 `.as`（清单见 docs/testing/CONTRACT.md §7）。
+供人工把 `tests/support/reference_impl.py` 的断言逐条映射回 `.as`（清单见 docs/testing/contract.md §7）。
 
 运行
 ----
@@ -16,9 +16,11 @@
 覆盖范围：
 (a) 17 个 provider 预设的 URL / 请求头 / 请求体断言（含默认模型、厂商扩展字段）；
 (b) 全部成功/异常响应样例解析（提取路径、数组 \\n 拼接、思考块跳过、围栏清洗）；
-(c) spec 解析边界（默认值、preset 默认模型、任意 spec 的 |opts、非法 spec）；
+(c) spec 解析边界（默认值、preset 默认模型、任意 spec 的 |opts、非法 spec、
+    style/context/deadline 选项与默认值）；
 (d) HTTP 状态码 -> 稳定错误码映射，以及超时/连接失败；
-(e) 登录自检（/models、404/405 放行、模型名匹配、custom 不探测）与 Key 脱敏。
+(e) 登录自检（/models、404/405 放行、模型名匹配、custom 不探测）与 Key 脱敏；
+(f) 提示词结构/目标语言规则/非对白过滤，以及译文质量门（回显、文字脚本、超长）。
 """
 
 import dataclasses
@@ -36,8 +38,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-import mock_server  # noqa: E402
-import ref_impl  # noqa: E402
+from support import mock_server  # noqa: E402
+from support import reference_impl as ref_impl  # noqa: E402
 
 KIND_OPENAI = ref_impl.KIND_OPENAI
 KIND_ANTHROPIC = ref_impl.KIND_ANTHROPIC
@@ -850,6 +852,48 @@ class TestRequestBuilding(unittest.TestCase):
         req = request_of("openai|temp=abc", prompt="hi")
         self.assertEqual(body_of(req)["temperature"], 0.2)
 
+    def test_temperature_normalization(self):
+        cases = {
+            "temp=1.": 1.0,
+            "temp=.5": 0.5,
+            "temp=01": 1.0,
+            "temp=00.5": 0.5,
+            "temp=1.2.3": 0.2,
+            "temp=.": 0.2,
+        }
+        for opt, expected in cases.items():
+            with self.subTest(opt=opt):
+                req = request_of("deepseek:deepseek-chat|" + opt, prompt="hi")
+                self.assertEqual(body_of(req)["temperature"], expected)
+
+    def test_style_and_context_options(self):
+        ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat|style=anime;context=6")
+        self.assertTrue(ok)
+        self.assertEqual(spec.style, "anime")
+        self.assertEqual(spec.context, 6)
+        self.assertEqual(spec.deadline, ref_impl.DEFAULT_DEADLINE)
+
+        ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat")
+        self.assertTrue(ok)
+        self.assertEqual(spec.style, "movie")
+        self.assertEqual(spec.context, 4)
+
+        for value, expected in (("0", 0), ("99", 8), ("abc", 4)):
+            with self.subTest(value=value):
+                ok, spec = ref_impl.parse_spec(f"deepseek:deepseek-chat|context={value}")
+                self.assertTrue(ok)
+                self.assertEqual(spec.context, expected)
+
+        for value, expected in (("5000", 5000), ("1000", 2000), ("99999", 20000), ("abc", 6000)):
+            with self.subTest(value=value):
+                ok, spec = ref_impl.parse_spec(f"deepseek:deepseek-chat|deadline={value}")
+                self.assertTrue(ok)
+                self.assertEqual(spec.deadline, expected)
+
+        ok, err = ref_impl.parse_spec("deepseek:deepseek-chat|style=unknown")
+        self.assertFalse(ok)
+        self.assertEqual(err.code, "bad_opts")
+
     def test_content_type_and_accept_on_every_provider(self):
         lines = [
             "openai:gpt-4o-mini",
@@ -1473,18 +1517,56 @@ class TestCleanText(unittest.TestCase):
                 self.assertIsInstance(ref_impl.clean_text(value), str)
 
     def test_clean_text_rtl(self):
-        self.assertEqual(ref_impl.clean_text("x", dst_lang="fa"), "\u202bx")
-        self.assertEqual(ref_impl.clean_text("x", dst_lang="Arabic"), "\u202bx")
-        self.assertEqual(ref_impl.clean_text("x", dst_lang="Chinese"), "x")
+        self.assertEqual(ref_impl.clean_text("x", dst_lang="فارسی"), "\u202bx")
+        self.assertEqual(ref_impl.clean_text("x", dst_lang="العربية"), "\u202bx")
+        self.assertEqual(ref_impl.clean_text("x", dst_lang="简体中文"), "x")
 
     def test_is_rtl(self):
-        for lang in ("fa", "ar", "he", "ur", "Persian", "Arabic", "fa-IR", " AR "):
+        for lang in ("العربية", "עברית", "فارسی", "اردو"):
             with self.subTest(lang=lang):
                 self.assertTrue(ref_impl.is_rtl(lang))
-        # .as IsRtlLabel 只认 ar/he/fa/ur（其他 RTL 语言不加 U+202B）
-        for lang in ("", None, "en", "Chinese", "ja", "fr", "yi", "ps", "sd"):
+        # .as IsRtlLabel 按 L_LABEL 精确匹配，不接受语言码/英文名
+        for lang in ("", None, "fa", "ar", "Arabic", "Persian", "fa-IR", " AR ",
+                     "en", "Chinese", "ja", "fr", "yi", "ps", "sd"):
             with self.subTest(lang=lang):
                 self.assertFalse(ref_impl.is_rtl(lang))
+
+    def test_known_prefix_count(self):
+        self.assertEqual(len(ref_impl.KNOWN_PREFIXES), 14)
+        self.assertEqual(len(set(ref_impl.KNOWN_PREFIXES)), 14)
+
+    def test_validate_translation(self):
+        self.assertEqual(ref_impl.validate_translation("Hello world", "你好，世界", "English", "Chinese"), "")
+        self.assertEqual(ref_impl.validate_translation("Hello world", "Hello world", "English", "Chinese"), "echo")
+        self.assertEqual(ref_impl.validate_translation("ok", "ok", "English", "Chinese"), "")
+        self.assertEqual(ref_impl.validate_translation("Hello", "This is an English sentence", "English", "Chinese"), "wrong_script")
+        self.assertEqual(ref_impl.validate_translation("Hello", "NASA", "English", "Chinese"), "")
+        self.assertEqual(ref_impl.validate_translation("Hello", "Mr. Smith", "English", "Chinese"), "")
+        self.assertEqual(ref_impl.validate_translation("Hello", "", "English", "Chinese"), "empty")
+        self.assertEqual(ref_impl.validate_translation("Hi", "你好", "Chinese", "Chinese"), "")
+        self.assertEqual(
+            ref_impl.validate_translation("Hi", "你" * 100, "English", "Chinese"),
+            "too_long",
+        )
+        self.assertEqual(ref_impl.validation_reason_zh("echo"), "回显原文")
+        self.assertEqual(ref_impl.validation_reason_zh("wrong_script"), "目标语言文字脚本不对")
+        self.assertEqual(ref_impl.validation_reason_zh("too_long"), "译文过长")
+        self.assertEqual(ref_impl.validation_reason_zh("unknown"), "unknown")
+
+    def test_non_dialogue_filter(self):
+        for value in ("♪", "♪♪", "。。。", "12345", "...", "— —"):
+            with self.subTest(value=value):
+                self.assertTrue(ref_impl.is_non_dialogue_text(value))
+        for value in ("Hello", "[door slams]", "你好", "2024 年"):
+            with self.subTest(value=value):
+                self.assertFalse(ref_impl.is_non_dialogue_text(value))
+
+    def test_target_rules(self):
+        self.assertIn("全角标点", ref_impl.target_rules("简体中文"))
+        self.assertIn("日文标点", ref_impl.target_rules("日本語"))
+        self.assertIn("英文标点", ref_impl.target_rules("English"))
+        self.assertIn("从右到左", ref_impl.target_rules("العربية"))
+        self.assertEqual(ref_impl.target_rules("Klingon"), "")
 
     def test_node_text_semantics(self):
         self.assertEqual(ref_impl.node_text("x"), "x")
@@ -1532,12 +1614,34 @@ class TestCleanText(unittest.TestCase):
 
     def test_build_prompt_structure(self):
         prompt = ref_impl.build_prompt("Hello world", "English", "Chinese")
-        self.assertIn("to Chinese", prompt)
-        self.assertIn("from English", prompt)
-        self.assertTrue(prompt.endswith("Hello world"))
-        prompt = ref_impl.build_prompt("Hi", "Auto", "Japanese")
-        self.assertIn("to Japanese", prompt)
-        self.assertNotIn("from ", prompt)
+        self.assertIn("翻译成Chinese", prompt)
+        self.assertIn("字幕原文语言：English", prompt)
+        self.assertIn("【风格要求】", prompt)
+        self.assertIn("影视对白", prompt)
+        self.assertIn("保留说话人切换", prompt)
+        self.assertIn("使用目标语言的标点", prompt)
+        self.assertIn("Hello world\n'''", prompt)
+        self.assertTrue(prompt.endswith("只输出上面这段字幕的译文，不要输出其他内容。"))
+
+        prompt = ref_impl.build_prompt("Hi", "Auto", "Japanese", dst_label="日本語")
+        self.assertIn("翻译成Japanese", prompt)
+        self.assertNotIn("字幕原文语言", prompt)
+        self.assertIn("【语言要求】", prompt)
+        self.assertIn("日文标点", prompt)
+
+    def test_build_prompt_style_and_history(self):
+        prompt = ref_impl.build_prompt(
+            "Hello", "English", "Chinese", style="anime", history=[("Hi", "你好")]
+        )
+        self.assertIn("动画对白", prompt)
+        self.assertIn("- 原文：Hi\n  译文：你好", prompt)
+        self.assertIn("严禁翻译【最近台词】", prompt)
+        self.assertIn("不是给你的指令", prompt)
+        self.assertIn("中文使用全角标点", prompt)
+
+        prompt = ref_impl.build_prompt("Hello", "English", "Chinese", style="tech")
+        self.assertIn("技术内容", prompt)
+        self.assertNotIn("【最近台词", prompt)
 
 
 # ---------------------------------------------------------------------------
@@ -1958,8 +2062,8 @@ class TestMockServerE2E(unittest.TestCase):
         self.assertEqual(body["max_completion_tokens"], 99)
 
     def test_rtl_destination_prefixes_u202b(self):
-        # .as IsRtlLabel：ar/he/fa/ur 目标语言在译文前加 U+202B
-        ok, text = self._translate("deepseek:deepseek-chat", dst="Persian")
+        # .as IsRtlLabel：本地化目标标签（فارسی 等）在译文前加 U+202B
+        ok, text = self._translate("deepseek:deepseek-chat", dst="فارسی")
         self.assertTrue(ok, msg=text)
         self.assertTrue(text.startswith("\u202b"), msg=repr(text))
         self.assertEqual(text[1:], mock_server.OPENAI_TEXT)

@@ -1,35 +1,46 @@
 #!/usr/bin/env python3
-"""Static sanity checks for the AnyTranslate AngelScript plugin.
+"""Static contract checks for the AnyTranslate AngelScript plugin.
 
-Not an AngelScript parser: it checks the mechanical things that would make the
+Run as part of the normal test suite:
+
+    python -m unittest discover -s tests -v
+    python -m unittest tests.test_static -v
+
+Not an AngelScript parser. It checks the mechanical things that would make the
 plugin fail to load or misbehave silently:
 
   * brace / parenthesis balance outside strings and comments
   * required plugin entry points are present
   * every ``L_*`` language table has the same length and no duplicates
   * every ``P_*`` preset table has the same length
+  * the two ``STYLE_*`` tables have the same length and no duplicates
   * every ``Host*`` API call exists in a PotPlayer API signature list
   * no duplicate top-level function definitions
 
 The API list defaults to the checked-in ``docs/api-signatures.txt`` so the
 check works on any machine (including CI). On a Windows box with PotPlayer
-installed, ``--api-doc`` can point at ``<PotPlayer>\\Extension\\api.txt``, or
-the script will try to detect that file automatically.
+installed, the script also tries to detect ``<PotPlayer>\\Extension\\api.txt``.
 """
 
 from __future__ import annotations
 
-import argparse
 import os
 import re
 import sys
+import unittest
 from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+from support import reference_impl  # noqa: E402
 
 PROJECT = Path(__file__).resolve().parents[1]
 DEFAULT_SCRIPT = PROJECT / "plugin" / "SubtitleTranslate - AnyTranslate.as"
 DEFAULT_API_DOC = PROJECT / "docs" / "api-signatures.txt"
 
-# PotPlayer plugin contract; see docs/DESIGN.md §4.
+# PotPlayer plugin contract; see docs/design.md §4.
 REQUIRED_ENTRY = (
     "GetTitle",
     "GetVersion",
@@ -111,14 +122,10 @@ def strip_code(text: str) -> str:
 
 
 def extract_array(text: str, name: str) -> list[str]:
-    m = re.search(r"array<string>\s+" + re.escape(name) + r"\s*=\s*\{(.*?)\n\};", text, re.S)
-    if not m:
-        raise SystemExit(f"array {name} not found")
-    return re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
-
-
-def array_names(text: str) -> list[str]:
-    return ARRAY_RE.findall(text)
+    match = re.search(r"array<string>\s+" + re.escape(name) + r"\s*=\s*\{(.*?)\n\};", text, re.S)
+    if not match:
+        raise ValueError(name)
+    return re.findall(r'"((?:[^"\\]|\\.)*)"', match.group(1))
 
 
 def api_names(path: Path) -> set[str]:
@@ -150,8 +157,8 @@ def detect_api_doc() -> Path | None:
                                     raw, _ = winreg.QueryValueEx(handle, value)
                                 except OSError:
                                     continue
-                                p = Path(str(raw))
-                                candidates.append(p.parent if p.is_file() else p)
+                                path = Path(str(raw))
+                                candidates.append(path.parent if path.is_file() else path)
                     except OSError:
                         continue
         except Exception:
@@ -168,21 +175,11 @@ def detect_api_doc() -> Path | None:
     return None
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Static checks for the AnyTranslate plugin")
-    parser.add_argument("--script", type=Path, default=DEFAULT_SCRIPT, help="AngelScript file to check")
-    parser.add_argument(
-        "--api-doc",
-        type=Path,
-        default=None,
-        help="Host API signature list (default: docs/api-signatures.txt, else auto-detect PotPlayer)",
-    )
-    parser.add_argument("--strict", action="store_true", help="fail when no API signature list is found")
-    args = parser.parse_args(argv)
-
-    script = args.script if args.script.is_absolute() else PROJECT / args.script
+def collect_problems() -> list[str]:
+    script = DEFAULT_SCRIPT
     if not script.exists():
-        raise SystemExit(f"script not found: {script}")
+        return [f"script not found: {script}"]
+
     text = script.read_text(encoding="utf-8")
     code = strip_code(text)
     problems: list[str] = []
@@ -196,29 +193,31 @@ def main(argv: list[str] | None = None) -> int:
         if not re.search(r"\b" + entry + r"\s*\(", code):
             problems.append(f"missing entry point: {entry}")
 
-    names = array_names(text)
-    language_arrays = [n for n in names if n.startswith("L_")]
+    names = ARRAY_RE.findall(text)
+    language_arrays = [name for name in names if name.startswith("L_")]
     for required in ("L_CODE", "L_LABEL", "L_PROMPT"):
         if required not in language_arrays:
             problems.append(f"missing language table: {required}")
     if language_arrays:
-        lengths = {}
+        lengths: dict[str, int] = {}
         for name in language_arrays:
             try:
                 lengths[name] = len(extract_array(text, name))
-            except SystemExit:
+            except ValueError:
                 problems.append(f"missing language table: {name}")
-        print("language tables: " + ", ".join(f"{k}={v}" for k, v in lengths.items()))
         if len(set(lengths.values())) > 1:
             problems.append(f"language table length mismatch: {lengths}")
         for name in ("L_CODE", "L_LABEL"):
             if name in lengths:
-                values = extract_array(text, name)
-                dupes = sorted({v for v in values if values.count(v) > 1})
+                try:
+                    values = extract_array(text, name)
+                except ValueError:
+                    continue
+                dupes = sorted({value for value in values if values.count(value) > 1})
                 if dupes:
                     problems.append(f"duplicate {name} value(s): {dupes}")
 
-    preset_arrays = [n for n in names if n.startswith("P_")]
+    preset_arrays = [name for name in names if name.startswith("P_")]
     if "P_ID" not in preset_arrays:
         problems.append("missing preset table: P_ID")
     if preset_arrays:
@@ -226,44 +225,64 @@ def main(argv: list[str] | None = None) -> int:
         for name in preset_arrays:
             try:
                 lengths[name] = len(extract_array(text, name))
-            except SystemExit:
+            except ValueError:
                 problems.append(f"missing preset table: {name}")
-        print("preset tables: " + ", ".join(f"{k}={v}" for k, v in lengths.items()))
         if len(set(lengths.values())) > 1:
             problems.append(f"preset table length mismatch: {lengths}")
 
-    if args.api_doc:
-        api_doc = args.api_doc if args.api_doc.is_absolute() else PROJECT / args.api_doc
-    else:
-        api_doc = DEFAULT_API_DOC if DEFAULT_API_DOC.is_file() else detect_api_doc()
-    if api_doc and api_doc.is_file():
-        known = api_names(api_doc)
+    style_arrays = [name for name in names if name.startswith("STYLE_")]
+    for required in ("STYLE_IDS", "STYLE_RULES"):
+        if required not in style_arrays:
+            problems.append(f"missing style table: {required}")
+    if style_arrays:
+        lengths = {}
+        for name in style_arrays:
+            try:
+                lengths[name] = len(extract_array(text, name))
+            except ValueError:
+                problems.append(f"missing style table: {name}")
+        if len(set(lengths.values())) > 1:
+            problems.append(f"style table length mismatch: {lengths}")
+        for name in ("STYLE_IDS", "STYLE_RULES"):
+            if name in lengths:
+                try:
+                    values = extract_array(text, name)
+                except ValueError:
+                    continue
+                dupes = sorted({value for value in values if values.count(value) > 1})
+                if dupes:
+                    problems.append(f"duplicate {name} value(s): {dupes}")
+        try:
+            style_ids = extract_array(text, "STYLE_IDS")
+            style_rules = extract_array(text, "STYLE_RULES")
+            if style_ids != list(reference_impl.STYLE_ORDER):
+                problems.append("STYLE_IDS 与 reference_impl.STYLE_ORDER 不一致")
+            expected_rules = [reference_impl.STYLE_RULES[name] for name in style_ids if name in reference_impl.STYLE_RULES]
+            if style_rules != expected_rules:
+                problems.append("STYLE_RULES 与 reference_impl.STYLE_RULES 不一致")
+        except (ValueError, KeyError):
+            pass
+
+    api_doc = DEFAULT_API_DOC if DEFAULT_API_DOC.is_file() else detect_api_doc()
+    if api_doc:
         used = sorted(set(HOST_RE.findall(code)))
-        unknown = [name for name in used if name not in known]
-        print(f"Host API used: {len(used)}; documented in {api_doc.relative_to(PROJECT) if api_doc.is_relative_to(PROJECT) else api_doc}: {len(known)}")
+        unknown = [name for name in used if name not in api_names(api_doc)]
         if unknown:
             problems.append(f"Host API not documented: {unknown}")
-    else:
-        message = "no API signature list found; skipping Host API check"
-        if args.strict:
-            problems.append(message)
-        else:
-            print(f"WARN: {message}")
 
-    defs = FUNC_RE.findall(code)
-    dup_funcs = sorted({d for d in defs if defs.count(d) > 1})
-    if dup_funcs:
-        problems.append(f"duplicate function definitions: {dup_funcs}")
-    print(f"functions defined: {len(defs)}")
+    definitions = FUNC_RE.findall(code)
+    duplicate_functions = sorted({name for name in definitions if definitions.count(name) > 1})
+    if duplicate_functions:
+        problems.append(f"duplicate function definitions: {duplicate_functions}")
 
-    if problems:
-        print("\nFAIL")
-        for problem in problems:
-            print(f"  - {problem}")
-        return 1
-    print("\nOK: static checks passed")
-    return 0
+    return problems
+
+
+class PluginStaticTest(unittest.TestCase):
+    def test_plugin_contract(self) -> None:
+        problems = collect_problems()
+        self.assertEqual(problems, [], "静态检查失败:\n" + "\n".join(f"  - {p}" for p in problems))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    unittest.main()

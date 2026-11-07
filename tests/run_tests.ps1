@@ -1,5 +1,5 @@
 ﻿#!/usr/bin/env pwsh
-# AnyTranslate 契约测试一键运行脚本（仅使用 Python 标准库）。
+# any-translate 测试一键运行脚本（静态检查 + 契约测试，仅使用 Python 标准库）。
 #
 # 用法（在任意目录均可执行）：
 #   pwsh -File tests/run_tests.ps1
@@ -9,9 +9,9 @@
 #
 # 步骤：
 #   1. 定位 Python（-Python > ANYTRANSLATE_PYTHON > PATH 中的 python/python3/py -3）；
-#   2. py_compile 语法检查三个交付文件；
+#   2. py_compile 语法检查四个 Python 文件；
 #   3. 独立启动 mock_server.py 并真实发一个请求，验证“可独立启动 + 记录请求”；
-#   4. python -m unittest discover -s tests -v；
+#   4. python -m unittest discover -s tests -v（含静态检查 test_static）；
 #   5. 输出通过/失败摘要，并以 unittest 退出码退出。
 
 param(
@@ -58,7 +58,7 @@ function Fail-And-Exit([string]$message, [int]$code = 1) {
     exit $code
 }
 
-Write-Host "================ AnyTranslate 契约测试 ================" -ForegroundColor Green
+Write-Host "================ any-translate 测试 ================" -ForegroundColor Green
 Write-Host "项目根目录: $projectRoot"
 Write-Host "tests 目录 : $scriptDir"
 
@@ -84,9 +84,10 @@ Write-Host "[OK] Python $versionLine"
 # ---------------------------------------------------------------------------
 Write-Step "py_compile 语法检查"
 $sources = @(
-    (Join-Path $scriptDir "mock_server.py"),
-    (Join-Path $scriptDir "ref_impl.py"),
-    (Join-Path $scriptDir "test_contract.py")
+    (Join-Path $scriptDir "test_contract.py"),
+    (Join-Path $scriptDir "test_static.py"),
+    (Join-Path $scriptDir "support\mock_server.py"),
+    (Join-Path $scriptDir "support\reference_impl.py")
 )
 foreach ($src in $sources) {
     if (-not (Test-Path -LiteralPath $src)) {
@@ -97,7 +98,7 @@ foreach ($src in $sources) {
 if ($LASTEXITCODE -ne 0) {
     Fail-And-Exit "py_compile 失败（见上方错误）。"
 }
-Write-Host "[OK] mock_server.py / ref_impl.py / test_contract.py 编译通过"
+Write-Host "[OK] test_contract.py / test_static.py / support/mock_server.py / support/reference_impl.py 编译通过"
 
 # ---------------------------------------------------------------------------
 # 3. 独立 mock_server 冒烟（--port 0 随机端口，避免 18080 被占用）
@@ -110,7 +111,7 @@ if (-not $NoSmoke) {
     $mockProcess = $null
     try {
         $mockProcess = Start-Process -FilePath $pythonExe `
-            -ArgumentList @((Join-Path $scriptDir "mock_server.py"), "--port", "0") `
+            -ArgumentList @((Join-Path $scriptDir "support\mock_server.py"), "--port", "0") `
             -WorkingDirectory $projectRoot `
             -RedirectStandardOutput $logFile `
             -RedirectStandardError $errFile `
@@ -246,7 +247,7 @@ Write-Host ("错误     : {0}" -f $errors) -ForegroundColor $(if ($errors -gt 0)
 Write-Host ("跳过     : {0}" -f $skipped)
 Write-Host ("通过率   : {0}%" -f $passRate)
 Write-Host ("mock 冒烟: {0}" -f $(if ($NoSmoke) { "跳过" } elseif ($smokeFailed) { "失败" } else { "通过" }))
-Write-Host ("运行命令 : python -m unittest discover -s tests -v" )
+Write-Host ("运行命令 : python -m unittest discover -s tests" + $(if ($VerboseTests) { " -v" } else { "" }))
 if ($resultOk) {
     Write-Host "结果     : PASS" -ForegroundColor Green
     exit 0

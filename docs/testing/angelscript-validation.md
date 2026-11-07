@@ -1,6 +1,6 @@
 # AngelScript 校验工具链调研
 
-> 位置：`docs/testing/ANGELSCRIPT-VALIDATION.md` ｜ 相关代码：`tools/check_as.py`、`tests/`
+> 位置：`docs/testing/angelscript-validation.md` ｜ 相关代码：`tests/test_static.py`、`tests/`
 >
 > 调研时间：2026-11-07。
 
@@ -27,29 +27,21 @@ AngelScript 官方 SDK（https://www.angelcode.com/angelscript/）只提供 C/C+
 
 ## 3. 当前校验方式
 
-### 3.1 静态检查（`tools/check_as.py`）
+### 3.1 静态检查（`tests/test_static.py`）
 
 不解析 AngelScript，检查会导致加载失败的机械问题：
 
 - 花括号/圆括号/方括号在字符串与注释之外是否配平；
 - 语言表 `L_CODE` / `L_LABEL` / `L_PROMPT` 长度一致且无重复；
-- 预设表长度与 `P_ID` 一致；
-- 用到的 `Host*` API 是否都能在 `%ProgramFiles%\DAUM\PotPlayer\Extension\api.txt` 中找到；
+- `P_*` 预设表与 `P_ID` 等长；`STYLE_IDS` / `STYLE_RULES` 等长且无重复；
+- 用到的 `Host*` API 是否都能在 `docs/api-signatures.txt` 中找到（Windows 上也会自动探测 `Extension\api.txt`）；
 - 必需入口函数（`GetTitle`/`ServerLogin`/`Translate`/…）是否齐全。
 
-当前输出：
-
-```text
-L_CODE=82  L_LABEL=82  L_PROMPT=82
-P_BASE=17  P_MODEL=17  P_PROTO=17  P_AUTH=17  P_KEYNAME=17  P_EXTRA=17
-Host API used: 13; documented in docs/api-signatures.txt: 103
-functions defined: 62
-OK: static checks passed
-```
-
 ```powershell
-python tools/check_as.py
+python -m unittest tests.test_static -v
 ```
+
+`run_tests.ps1` 的 unittest 步骤会自动包含这项检查。
 
 ### 3.2 契约测试（`tests/`）
 
@@ -60,7 +52,7 @@ pwsh -File tests/run_tests.ps1
 ```
 
 不执行 AngelScript，但把"配置语法 → HTTP 请求 → 响应解析"的契约固定下来；
-`tests/ref_impl.py` 逐函数镜像 `.as`，人工按 `docs/testing/CONTRACT.md` §7
+`tests/support/reference_impl.py` 逐函数镜像 `.as`，人工按 `docs/testing/contract.md` §7
 的清单做对照。
 
 ### 3.3 PotPlayer 实机加载
@@ -80,7 +72,7 @@ AngelScript 的 Emscripten/WASM 封装（包名待确认），同样需要宿主
 
 ## 4. 校验流程
 
-- 提交前：`python tools/check_as.py` + `pwsh -File tests/run_tests.ps1`，
-  再按 `docs/testing/CONTRACT.md` §7 做人工对照；
+- 提交前：`python -m unittest tests.test_static -v` + `pwsh -File tests/run_tests.ps1`，
+  再按 `docs/testing/contract.md` §7 做人工对照；
 - 发布前：PotPlayer 实机加载一次，并用真实 Key 对各服务商各翻译一条字幕
   （`tests/` 的 mock 不覆盖宿主 HTTP 行为）。
