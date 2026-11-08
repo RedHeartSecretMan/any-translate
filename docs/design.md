@@ -25,6 +25,9 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 | 流式输出 | 不使用 | `Translate()` 必须同步返回最终字符串，流式没有落点 |
 | 线程/异步 | 不使用 | 同上；引入线程只增加竞态与复杂度 |
 | 错误呈现 | 登录期中文提示，运行期静默返回空串 | 避免把错误文案混进字幕；诊断信息走 `debug=1` 控制台 |
+| 输出清理 | 去 Markdown 围栏、`'''` / `"""` 包裹、常见前缀与首尾引号 | 兼容会加格式围栏的翻译模型，避免符号进入字幕 |
+| 中文简繁 | 目标 `zh-CN` 且原文可判断为中文时直接逐字转换；模型输出再用字体校验兜底 | 避免模型保留繁体字或为做字形转换擅自改写语义 |
+| 上下文隔离 | 校验输出是否复述“- 原文/译文”历史块；命中后用无上下文提示词重试 | 防止模型把仅供理解语境的最近台词带进字幕 |
 | 失败降级 | 400 参数类 → 最小体并记忆；200 空 → 重试；全部受单条 `deadline` 约束 | 兼容推理模型对参数的限制，同时避免拖住后续字幕 |
 | 配置持久化 | `HostSaveString`（PotPlayer 脚本存储） | 与插件接口一致；不额外引入文件 |
 | 提示词 | 中文指令 + 硬规则 + 风格模板 + 近 N 组原文/译文上下文 | 单条字幕 token 可控，风格和上下文提升指代、术语与语气一致性 |
@@ -108,7 +111,7 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 - `custom` 的 `endpoint_url` 是**完整请求地址**（不再追加协议路径），`model`
   可留空（服务端默认模型）；
 - `opts` 以 `;` 分隔、`=` 赋值：`path`、`auth`、`keyname`、`body`、`temp`、
-  `max_tokens`、`minimal`、`version`、`probe`、`debug`、`style`、`context`、`deadline`；
+  `max_tokens`、`minimal`、`version`、`probe`、`debug`、`style`、`context`、`deadline`、`dst`、`think`；
 - `auth=query` 时 Key 拼进 URL（参数名 `keyname`，默认 `key`；Gemini 的 query
   参数名是 `key`）。能走请求头就别用 query，Key 会出现在代理/网关日志里；
   该模式只对支持 URL 鉴权的服务有意义（Gemini、部分自定义网关），
@@ -160,6 +163,8 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 | `style` | 翻译风格模板（见 §5.3） | `movie` |
 | `context` | 送给模型的最近原文+译文组数，`0..8` | `4` |
 | `deadline` | 单条字幕总预算（毫秒），`2000..20000` | `6000` |
+| `dst` | 强制目标语言代码（如 `ko`、`zh-CN`），绕过宿主目标语言缓存 | 跟随界面选择 |
+| `think` | `0`/`1` 按服务商发送 thinking 开关：DeepSeek/Moonshot/Zhipu `thinking.type`，Qwen/SiliconFlow `enable_thinking`，OpenRouter `reasoning.enabled`，本地/custom `chat_template_kwargs`，OpenAI/Groq/xAI/Together/Mistral `reasoning_effort`，Ollama `think`，Gemini `thinkingConfig` | 不发送 |
 
 示例：
 
@@ -168,6 +173,7 @@ deepseek:deepseek-v4-flash
 openai:gpt-5.6-terra|temp=0.1
 gemini:gemini-3.5-flash
 deepseek:deepseek-v4-flash|style=anime;context=6;deadline=5000
+custom|http://127.0.0.1:18080/v1/chat/completions|index2b|auth=none;dst=ko;debug=1
 custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;auth=x-api-key;keyname=X-Key
 ```
 

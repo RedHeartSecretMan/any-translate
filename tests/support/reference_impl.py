@@ -81,6 +81,8 @@ OPTS_KEYS = (
     "style",
     "context",
     "deadline",
+    "dst",
+    "think",
 )
 
 DEFAULT_STYLE = "movie"
@@ -234,6 +236,8 @@ class Spec:
     style: str = DEFAULT_STYLE
     context: int = DEFAULT_CONTEXT
     deadline: int = DEFAULT_DEADLINE
+    dst_override: str = ""
+    think: str = ""
     extra_body: Dict[str, Any] = field(default_factory=dict)
     raw: str = ""
 
@@ -615,6 +619,9 @@ def _finish_spec(
         )
     context = _parse_context(opts.get("context"))
     deadline = _parse_deadline(opts.get("deadline"))
+    dst_override = (opts.get("dst") or "").strip()
+    think_raw = (opts.get("think") or "").strip().lower()
+    think = "0" if think_raw in ("0", "false", "off") else "1" if think_raw in ("1", "true", "on") else ""
     extra_body: Dict[str, Any] = {} if (is_custom or provider == "custom") else dict(preset.extra_body)
 
     return True, Spec(
@@ -636,6 +643,8 @@ def _finish_spec(
         style=style,
         context=context,
         deadline=deadline,
+        dst_override=dst_override,
+        think=think,
         extra_body=extra_body,
         raw=raw,
     )
@@ -672,7 +681,12 @@ def target_rules(label: Any) -> str:
     """镜像 .as TargetRules：按目标语言族给出排版/标点要求。"""
     value = ("" if label is None else str(label)).strip().lower()
     if value.startswith("zh") or "chinese" in value or "中文" in value:
-        return "中文使用全角标点；避免翻译腔和过长定语，长句按语义拆分。"
+        rules = "中文使用全角标点；避免翻译腔和过长定语，长句按语义拆分。"
+        if value in ("zh-cn", "zh_cn") or "simplified" in value or "简体" in value:
+            rules += "目标为简体中文；原文是繁体中文时必须逐字转为简体，不要保留繁体字，也不要原样复制。"
+        elif value in ("zh-tw", "zh_tw") or "traditional" in value or "繁體" in value or "繁体" in value:
+            rules += "目标为繁体中文；原文是简体中文时按语义与用词转为繁体，注意“发”可作“發/髮”、“复”可作“復/複”等一对多情况，不要机械逐字替换，不要保留简体字。"
+        return rules
     if value in ("ja", "japanese", "日语", "日文", "日本語"):
         return "日文使用日文标点「。」「、」；按人物关系处理敬语与语气词。"
     if value in ("ko", "korean", "韩语", "韓語", "한국어"):
@@ -770,6 +784,22 @@ def build_headers(spec: Spec, key: str = "") -> Dict[str, str]:
     return headers
 
 
+def _think_body(spec: Spec) -> Dict[str, Any]:
+    """按 provider 选择 thinking 开关字段（镜像 .as OpenAiThinkField）。"""
+    if not spec.think:
+        return {}
+    on = spec.think == "1"
+    if spec.preset in ("deepseek", "moonshot", "zhipu"):
+        return {"thinking": {"type": "enabled" if on else "disabled"}}
+    if spec.preset in ("qwen", "siliconflow"):
+        return {"enable_thinking": on}
+    if spec.preset == "openrouter":
+        return {"reasoning": {"enabled": on}}
+    if spec.preset in ("vllm", "sglang", "lmstudio", "custom"):
+        return {"chat_template_kwargs": {"enable_thinking": on}}
+    return {"reasoning_effort": "medium" if on else "minimal"}
+
+
 def build_body(
     spec: Spec,
     prompt: str,
@@ -820,7 +850,7 @@ def build_body(
         generation: Dict[str, Any] = {"temperature": spec.temperature}
         if spec.max_tokens is not None:
             generation["maxOutputTokens"] = spec.max_tokens
-        if not spec.minimal:
+        if spec.think == "0" or (not spec.think and not spec.minimal):
             generation["thinkingConfig"] = {"thinkingBudget": 0}
         body = {
             "contents": [{"parts": [{"text": prompt}]}],
@@ -831,20 +861,25 @@ def build_body(
     if spec.kind == KIND_OLLAMA:
         body["stream"] = False
         if not spec.minimal:
-            body["think"] = False
+            body["think"] = spec.think == "1"
             options: Dict[str, Any] = {"temperature": spec.temperature}
             if spec.max_tokens is not None:
                 options["num_predict"] = spec.max_tokens
             body["options"] = options
+        elif spec.think:
+            body["think"] = spec.think == "1"
         return True, json_dumps_manual(body)
 
     # openai 兼容（含 custom 默认体）
     body["stream"] = False
+    if spec.think:
+        body.update(_think_body(spec))
     if not spec.minimal:
         body["temperature"] = spec.temperature
         if spec.max_tokens is not None:
             body["max_completion_tokens"] = spec.max_tokens
-        body.update(spec.extra_body)
+        if not spec.think:
+            body.update(spec.extra_body)
     return True, json_dumps_manual(body)
 
 
@@ -1507,6 +1542,22 @@ def strip_known_prefixes(raw: Any) -> str:
     return text
 
 
+def strip_triple_quote_wrapper(text: str) -> str:
+    """镜像 .as StripTripleQuoteWrapper：剥离开头/结尾各一层三引号。"""
+    s = text.strip()
+    for fence in ("'''", '"""'):
+        if s.startswith(fence):
+            newline = s.find("\n")
+            if newline >= 0:
+                s = s[newline + 1:]
+            else:
+                s = s[len(fence):]
+            s = s.strip()
+        if len(s) >= len(fence) and s.endswith(fence):
+            s = s[:-len(fence)].strip()
+    return s
+
+
 def clean_text(text: Any, dst_lang: str = "") -> str:
     """镜像 .as CleanTranslation（去围栏/前缀/包裹引号、换行规范化、RTL 前缀）。"""
     if text is None:
@@ -1523,6 +1574,7 @@ def clean_text(text: Any, dst_lang: str = "") -> str:
             s = s[:-3]
         s = s.strip()
 
+        s = strip_triple_quote_wrapper(s)
         s = strip_known_prefixes(s)
         s = s.strip()
 
@@ -1605,12 +1657,72 @@ def looks_like_latin_sentence(text: str) -> bool:
     return has_ascii_lower(text) and (text.count(" ") >= 2 or len(text.encode("utf-8")) > 24)
 
 
-def validate_translation(source: Any, result: Any, src: Any = "", dst: Any = "") -> str:
+_ZH_TRAD_ONLY = frozenset(
+    "裡這們來說過還讓舊麼樣時間開關個畫線見塊風賣遺棄會為與從對於後發現實學覺聽讀寫語簡單體國圖書車門問東動務員輸贏嗎誰"
+)
+_ZH_SIMP_ONLY = frozenset(
+    "这们来说过还让旧么样时间开关个画线见块风卖遗弃会为与从对于后发现实学觉听读写语简单体国图书车门问东动务员输赢吗谁"
+)
+
+
+def _zh_variant(label: Any) -> str:
+    value = ("" if label is None else str(label)).strip().lower()
+    if value in ("zh-cn", "zh_cn") or "simplified" in value or "简体" in value:
+        return "zh-cn"
+    if value in ("zh-tw", "zh_tw") or "traditional" in value or "繁體" in value or "繁体" in value:
+        return "zh-tw"
+    return ""
+
+
+def chinese_variant_mismatch(result: str, dst: Any) -> str:
+    variant = _zh_variant(dst)
+    if variant == "zh-cn" and any(ch in _ZH_TRAD_ONLY for ch in result):
+        return "traditional"
+    if variant == "zh-tw" and any(ch in _ZH_SIMP_ONLY for ch in result):
+        return "simplified"
+    return ""
+
+
+def looks_like_history_leak(result: Any, history: Any = None) -> bool:
+    text = "" if result is None else str(result)
+    if any(marker in text for marker in ("【最近台词", "- 原文", "原文：", "译文：", "译文:")):
+        return True
+    for pair in history or []:
+        try:
+            src_line, dst_line = pair
+        except Exception:
+            continue
+        dst_text = str(dst_line)
+        if (
+            len(dst_text.encode("utf-8")) >= 8
+            and dst_text.endswith(("。", "！", "？", ".", "!", "?"))
+            and dst_text in text
+            and text != dst_text
+        ):
+            return True
+        if len(dst_text.encode("utf-8")) >= 8 and dst_text in text and text.find(dst_text) > 0 and text != dst_text:
+            return True
+        src_text = str(src_line)
+        if (
+            len(src_text.encode("utf-8")) >= 8
+            and src_text in text
+            and text != src_text
+        ):
+            return True
+    return False
+
+
+def validate_translation(
+    source: Any, result: Any, src: Any = "", dst: Any = "", history: Any = None
+) -> str:
     """镜像 .as ValidateTranslation；返回空串表示通过，否则返回错误码。"""
     source_text = "" if source is None else str(source)
     result_text = "" if result is None else str(result)
     if not result_text.strip():
         return "empty"
+
+    if looks_like_history_leak(result_text, history):
+        return "history_leak"
 
     src_code = lang_code(src)
     dst_code = lang_code(dst)
@@ -1632,6 +1744,10 @@ def validate_translation(source: Any, result: Any, src: Any = "", dst: Any = "")
     ):
         return "wrong_script"
 
+    variant_error = chinese_variant_mismatch(result_text, dst)
+    if variant_error:
+        return variant_error
+
     if len(result_text.encode("utf-8")) > len(source_text.encode("utf-8")) * 6 + 80:
         return "too_long"
     return ""
@@ -1642,8 +1758,11 @@ def validation_reason_zh(code: Any) -> str:
     value = "" if code is None else str(code)
     return {
         "empty": "译文为空",
+        "history_leak": "译文混入了上下文格式",
         "echo": "回显原文",
         "wrong_script": "目标语言文字脚本不对",
+        "traditional": "译文仍是繁体字，需要转为简体",
+        "simplified": "译文仍是简体字，需要转为繁体",
         "too_long": "译文过长",
     }.get(value, value)
 
@@ -1715,6 +1834,8 @@ def translate_with_spec(
             return False, _err("config_error", "内部错误：spec 不是有效配置")
         src_text = "" if src is None else str(src)
         dst_text = "" if dst is None else str(dst)
+        if spec.dst_override:
+            dst_text = spec.dst_override
         raw_text = "" if text is None else str(text)
         prompt = build_prompt(raw_text, src_text, dst_text)
         ok, req = build_request(

@@ -44,7 +44,8 @@ any-translate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译
 | 17 个预设 + custom | 换服务商/模型只改登录框里的一行配置 |
 | 上下文翻译 | 默认保留最近 4 组原文+译文作为语境，`context=0..8` 可调，提升指代、术语与语气一致性 |
 | 场景风格 | `style=movie/tv/anime/doc/tech/formal/casual`，按题材切换提示词模板 |
-| 译文质量门 | 回显原文、目标文字脚本、超长译文会被拦截并重试一次，失败宁可不显示 |
+| 译文质量门 | 回显原文、目标文字脚本、繁简不匹配、超长译文会被拦截并重试一次，失败宁可不显示 |
+| 中文简繁 | 目标简体且原文是中文时直接逐字转换，避免模型保留繁体或改写语义 |
 | 实时预算 | 单条字幕默认 6 s 总预算，预算内才继续降级/质量重试；`deadline=2000..20000` 可调 |
 | 非对白过滤 | 纯符号、纯数字、音乐符号行不请求 API，原样返回 |
 | 缓存去重 | 相同台词命中缓存（最近 64 条），避免重复请求与计费 |
@@ -141,7 +142,7 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 - `preset` 不区分大小写；`model` 只按**第一个** `:` 切分，所以 `ollama:qwen3:4b` 合法。
 - 任意 spec 都可以在结尾用 `|` 追加 opts（预设与 custom 都支持）。
 - `custom` 的 `endpoint_url` 是完整请求地址，不再追加协议路径。
-- `opts` 用 `;` 分隔、`=` 赋值；可用：`path`、`auth`、`keyname`、`body`、`temp`、`max_tokens`、`minimal`、`version`、`probe`、`debug`、`style`、`context`、`deadline`。
+- `opts` 用 `;` 分隔、`=` 赋值；可用：`path`、`auth`、`keyname`、`body`、`temp`、`max_tokens`、`minimal`、`version`、`probe`、`debug`、`style`、`context`、`deadline`、`dst`、`think`。
 - `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`（没有转义机制）。
 - `auth=query` 会把 Key 拼进 URL（参数名 `keyname`，默认 `key`）；能走请求头就别用 query，Key 会出现在代理/网关日志里。`auth=query` 只对支持 URL 鉴权的服务有意义（Gemini、部分自定义网关）；OpenAI / Anthropic 官方接口不接受 query 鉴权，会以 401 明确失败。
 - 密码框留空时沿用上次保存的 Key；用户框留空时沿用上次保存的 spec。
@@ -163,8 +164,10 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 | `style` | 翻译风格：`movie` / `tv` / `anime` / `doc` / `tech` / `formal` / `casual` | `movie` |
 | `context` | 最近原文+译文组数，`0..8` | `4` |
 | `deadline` | 单条字幕总预算（毫秒），`2000..20000` | `6000` |
+| `dst` | 强制目标语言代码，绕过宿主目标语言缓存；接受 `ko`、`zh-CN` 等 | 跟随界面选择 |
+| `think` | `0` 关闭 thinking，`1` 开启；按服务商发送对应字段（DeepSeek/Moonshot/Zhipu 的 `thinking.type`、Qwen/SiliconFlow 的 `enable_thinking`、OpenRouter 的 `reasoning.enabled`、vLLM/SGLang/LM Studio/custom 的 `chat_template_kwargs`、OpenAI/Groq/xAI/Together/Mistral 的 `reasoning_effort`、Ollama 的 `think`、Gemini 的 `thinkingConfig`） | 不发送 |
 
-注意各选项的生效范围：`body` 只对 `custom` 生效；`path`/`auth`/`keyname`/`probe` 对任意 spec 生效；`version` 只对 Anthropic 请求头生效；`probe=models` 只对预设生效（`custom` 登录不做自检）。
+注意各选项的生效范围：`body` 只对 `custom` 生效；`path`/`auth`/`keyname`/`probe` 对任意 spec 生效；`dst` 强制覆盖界面目标语言，适合 PotPlayer 运行中切换目标语言不生效时使用；`think` 按服务商映射，显式设置时会覆盖预设自带的 thinking 字段，若某服务拒绝该字段请删掉它或用 `body` 模板；`version` 只对 Anthropic 请求头生效；`probe=models` 只对预设生效（`custom` 登录不做自检）。
 
 ### 翻译风格
 
@@ -251,6 +254,7 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 | 译文串味或不连贯 | 默认上下文 4 组；可调 `context=0..8`，暂停超过 2 分钟会自动清空。 |
 | 升级后列表目标语言仍是旧名称 | PotPlayer 会缓存插件上次的目标语言名称；在设置里重新选择一次目标语言，或重启 PotPlayer。 |
 | 译文过长/回显原文/答错语言 | 插件会拦截并重试一次；仍不合格会留空，`debug=1` 可看到 `validation failed` 原因。 |
+| 字幕里出现“- 原文/译文” | 模型复述了上下文块；新版本会判 `history_leak`，自动去掉上下文重试一次。 |
 
 调试示例：`deepseek:deepseek-v4-flash|debug=1`。高级选项（`path`、`body`、`minimal`、`temp` 等）可以加在任意 spec 的 `|` 之后；`custom|...|...|opts` 也支持同样的 opts 语法。
 

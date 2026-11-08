@@ -332,6 +332,17 @@ class TestSpecParsing(unittest.TestCase):
         self.assertEqual(spec.path, "result.translation")
         self.assertEqual(spec.preset, "deepseek")
 
+    def test_dst_override_option(self):
+        ok, spec = ref_impl.parse_spec(
+            f"custom|{CUSTOM_PLACEHOLDER_URL}|m|dst=ko"
+        )
+        self.assertTrue(ok, msg=spec)
+        self.assertEqual(spec.dst_override, "ko")
+
+        ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat")
+        self.assertTrue(ok, msg=spec)
+        self.assertEqual(spec.dst_override, "")
+
     def test_custom_basic_url_with_port(self):
         line = "custom|http://127.0.0.1:8080/v1/translate|my-model"
         ok, spec = ref_impl.parse_spec(line)
@@ -598,6 +609,34 @@ class TestRequestBuilding(unittest.TestCase):
         body = body_of(req)
         self.assertEqual(body, openai_body("gpt-5.6-terra", "hi"))
         self.assertNotIn("thinking", body)
+
+    def test_think_option_adds_openai_template_flag(self):
+        ok, spec = ref_impl.parse_spec(f"custom|{CUSTOM_PLACEHOLDER_URL}|m|think=0")
+        self.assertTrue(ok, msg=spec)
+        ok, req = ref_impl.build_request(spec, "sk-test", "hi", dst="zh-CN")
+        self.assertTrue(ok, msg=req)
+        self.assertEqual(body_of(req)["chat_template_kwargs"], {"enable_thinking": False})
+
+        ok, spec = ref_impl.parse_spec(f"custom|{CUSTOM_PLACEHOLDER_URL}|m|think=1")
+        self.assertTrue(ok, msg=spec)
+        ok, req = ref_impl.build_request(spec, "sk-test", "hi", dst="zh-CN")
+        self.assertTrue(ok, msg=req)
+        self.assertEqual(body_of(req)["chat_template_kwargs"], {"enable_thinking": True})
+
+    def test_think_option_provider_fields(self):
+        self.assertEqual(body_of(request_of("deepseek:deepseek-chat|think=0"))["thinking"], {"type": "disabled"})
+        self.assertEqual(body_of(request_of("deepseek:deepseek-chat|think=1"))["thinking"], {"type": "enabled"})
+        self.assertIs(body_of(request_of("qwen:qwen-flash|think=1"))["enable_thinking"], True)
+        self.assertIs(body_of(request_of("openrouter:openai/gpt-x|think=0"))["reasoning"]["enabled"], False)
+        self.assertEqual(
+            body_of(request_of("gemini:gemini-3.5-flash|think=0"))["generationConfig"]["thinkingConfig"],
+            {"thinkingBudget": 0},
+        )
+        self.assertNotIn(
+            "thinkingConfig",
+            body_of(request_of("gemini:gemini-3.5-flash|think=1"))["generationConfig"],
+        )
+        self.assertIs(body_of(request_of("ollama:qwen3:4b|think=1"))["think"], True)
 
     def test_qwen_and_siliconflow_disable_thinking(self):
         for name in ("qwen", "siliconflow"):
@@ -1487,6 +1526,11 @@ class TestCleanText(unittest.TestCase):
             "``` 你好 ```": "``` 你好",  # .as 只按首个换行去开围栏
             "```\n你好": "你好",
             "你好```": "你好",
+            "'''\n你好\n'''": "你好",
+            "'''你好'''": "你好",
+            '"""\n你好\n"""': "你好",
+            "'''\n你好": "你好",
+            "你好'''": "你好",
             "翻译：你好": "你好",
             "译文: 你好": "你好",
             "Translation: 你好": "你好",
@@ -1555,11 +1599,49 @@ class TestCleanText(unittest.TestCase):
         self.assertEqual(ref_impl.validate_translation("Hello", "NASA", "English", "Chinese"), "")
         self.assertEqual(ref_impl.validate_translation("Hello", "Mr. Smith", "English", "Chinese"), "")
         self.assertEqual(ref_impl.validate_translation("Hello", "", "English", "Chinese"), "empty")
+        self.assertEqual(
+            ref_impl.validate_translation("Hello", "- 原文：Hello\n译文：你好", "English", "Chinese"),
+            "history_leak",
+        )
+        self.assertEqual(
+            ref_impl.validate_translation(
+                "Hello", "你好。\n情况好点啦。", "English", "Chinese",
+                history=[("Hello", "情况好点啦。")],
+            ),
+            "history_leak",
+        )
+        self.assertEqual(
+            ref_impl.validate_translation(
+                "まあ、とりあえずもう少ししたら", "嗯，总之过一会儿应该就能走了。",
+                "Japanese", "Chinese",
+                history=[("もう少し時間がたったら", "过一会儿应该就能走了")],
+            ),
+            "history_leak",
+        )
+        self.assertEqual(
+            ref_impl.validate_translation(
+                "さくらさん、この後って予定あります?", "樱花小姐，接下来有什么安排吗？",
+                "Japanese", "Chinese",
+                history=[("さくらさん", "樱花小姐")],
+            ),
+            "",
+        )
+        self.assertEqual(ref_impl.validation_reason_zh("history_leak"), "译文混入了上下文格式")
         self.assertEqual(ref_impl.validate_translation("Hi", "你好", "Chinese", "Chinese"), "")
         self.assertEqual(
             ref_impl.validate_translation("Hi", "你" * 100, "English", "Chinese"),
             "too_long",
         )
+        self.assertEqual(
+            ref_impl.validate_translation("夜里", "夜裡", "", "zh-CN"),
+            "traditional",
+        )
+        self.assertEqual(
+            ref_impl.validate_translation("夜裡", "这", "", "zh-TW"),
+            "simplified",
+        )
+        self.assertEqual(ref_impl.validation_reason_zh("traditional"), "译文仍是繁体字，需要转为简体")
+        self.assertEqual(ref_impl.validation_reason_zh("simplified"), "译文仍是简体字，需要转为繁体")
         self.assertEqual(ref_impl.validation_reason_zh("echo"), "回显原文")
         self.assertEqual(ref_impl.validation_reason_zh("wrong_script"), "目标语言文字脚本不对")
         self.assertEqual(ref_impl.validation_reason_zh("too_long"), "译文过长")
@@ -1575,6 +1657,11 @@ class TestCleanText(unittest.TestCase):
 
     def test_target_rules(self):
         self.assertIn("全角标点", ref_impl.target_rules("简体中文"))
+        self.assertIn("逐字转为简体", ref_impl.target_rules("zh-CN"))
+        self.assertIn("机械逐字替换", ref_impl.target_rules("zh-TW"))
+        self.assertIn("發/髮", ref_impl.target_rules("zh-TW"))
+        self.assertIn("復/複", ref_impl.target_rules("zh-TW"))
+        self.assertNotIn("后", ref_impl.target_rules("zh-TW"))
         self.assertIn("日文标点", ref_impl.target_rules("日本語"))
         self.assertIn("英文标点", ref_impl.target_rules("English"))
         self.assertIn("从右到左", ref_impl.target_rules("العربية"))

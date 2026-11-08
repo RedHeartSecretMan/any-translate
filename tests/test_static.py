@@ -324,6 +324,20 @@ class PluginStaticTest(unittest.TestCase):
 
         self.assertEqual(problems, [], "静态检查失败:\n" + "\n".join(f"  - {p}" for p in problems))
 
+    def test_zh_t2s_mapping_integrity(self) -> None:
+        text = DEFAULT_SCRIPT.read_text(encoding="utf-8")
+        match = re.search(r'string ZH_T2S_PAIRS = "(.*?)";', text)
+        self.assertIsNotNone(match, "ZH_T2S_PAIRS missing")
+        raw = match.group(1).encode("utf-8")
+        self.assertEqual(len(raw) % 6, 0, "ZH_T2S_PAIRS must be 3-byte char + 3-byte char pairs")
+        pairs = {
+            raw[i:i + 3].decode("utf-8"): raw[i + 3:i + 6].decode("utf-8")
+            for i in range(0, len(raw), 6)
+        }
+        self.assertEqual(pairs.get("裡"), "里")
+        self.assertEqual(pairs.get("這"), "这")
+        self.assertEqual(pairs.get("們"), "们")
+
 
 if __name__ == "__main__":
     unittest.main()
