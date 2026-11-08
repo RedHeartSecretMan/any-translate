@@ -10,7 +10,7 @@
       - OpenAI compatible  : /chat/completions
       - Anthropic          : /v1/messages
       - Google Gemini      : /v1beta/models/{model}:generateContent
-      - Ollama native      : /api/chat
+      - Ollama             : /api/chat
       - Custom JSON API    : user supplied URL + body template + JSON path
 */
 
@@ -20,7 +20,7 @@
 
 string GetTitle()
 {
-    return "{$CP949=AnyTranslate 번역$}{$CP950=AnyTranslate 翻譯$}{$CP0=AnyTranslate}";
+    return "{$CP936=AnyTranslate 翻译$}{$CP950=AnyTranslate 翻譯$}{$CP949=AnyTranslate 번역$}{$CP932=AnyTranslate 翻訳$}{$CP0=AnyTranslate}";
 }
 
 string GetVersion()
@@ -30,7 +30,7 @@ string GetVersion()
 
 string GetDesc()
 {
-    return "多 API 实时字幕翻译: OpenAI 兼容 / Anthropic / Gemini / Ollama / 自定义 JSON | https://github.com/RedHeartSecretMan/any-translate";
+    return "多 API 实时字幕翻译插件";
 }
 
 string GetLoginTitle()
@@ -40,19 +40,17 @@ string GetLoginTitle()
 
 string GetLoginDesc()
 {
-    return "用户框: deepseek:deepseek-v4-flash|style=movie;context=4 或 custom|<url>|<model>|<opts>；密码框: API Key（本机服务留空）";
+    return "示例：deepseek:deepseek-v4-flash";
 }
 
 string GetUserText()
 {
-    string suffix = "";
-    if (!g_last_error.empty()) suffix = " [" + g_last_error + "]";
-    return "服务: " + DescribeCurrentSpec() + suffix;
+    return "服务：";
 }
 
 string GetPasswordText()
 {
-    return "API Key: " + MaskKey(CurrentKey());
+    return "API Key：";
 }
 
 // ===========================================================================
@@ -115,13 +113,32 @@ string g_pending_log = "";
 
 array<string> P_ID =
 {
-    "openai", "deepseek", "moonshot", "zhipu", "qwen", "siliconflow",
-    "openrouter", "groq", "xai", "mistral", "together",
-    "lmstudio", "vllm", "ollama", "anthropic", "gemini", "custom"
+    "vllm",
+    "sglang",
+    "lmstudio",
+    "ollama",
+    "openai",
+    "deepseek",
+    "moonshot",
+    "zhipu",
+    "qwen",
+    "siliconflow",
+    "openrouter",
+    "groq",
+    "xai",
+    "mistral",
+    "together",
+    "anthropic",
+    "gemini",
+    "custom"
 };
 
 array<string> P_BASE =
 {
+    "http://127.0.0.1:8000/v1",
+    "http://127.0.0.1:30000/v1",
+    "http://127.0.0.1:1234/v1",
+    "http://127.0.0.1:11434",
     "https://api.openai.com/v1",
     "https://api.deepseek.com/v1",
     "https://api.moonshot.cn/v1",
@@ -133,9 +150,6 @@ array<string> P_BASE =
     "https://api.x.ai/v1",
     "https://api.mistral.ai/v1",
     "https://api.together.ai/v1",
-    "http://127.0.0.1:1234/v1",
-    "http://127.0.0.1:8000/v1",
-    "http://127.0.0.1:11434",
     "https://api.anthropic.com",
     "https://generativelanguage.googleapis.com",
     ""
@@ -143,6 +157,10 @@ array<string> P_BASE =
 
 array<string> P_MODEL =
 {
+    "",
+    "",
+    "",
+    "",
     "gpt-5.6-terra",
     "deepseek-v4-flash",
     "kimi-k3.1-pro",
@@ -151,12 +169,9 @@ array<string> P_MODEL =
     "deepseek-ai/DeepSeek-V4-Flash",
     "openai/gpt-5.6-terra",
     "openai/gpt-oss-120b",
-    "grok-4.20",
+    "grok-4.7",
     "mistral-small-latest",
     "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-    "",
-    "",
-    "qwen3:4b",
     "claude-sonnet-4-6",
     "gemini-3.5-flash",
     ""
@@ -164,23 +179,69 @@ array<string> P_MODEL =
 
 array<string> P_PROTO =
 {
-    "openai", "openai", "openai", "openai", "openai", "openai",
-    "openai", "openai", "openai", "openai", "openai",
-    "openai", "openai", "ollama", "anthropic", "gemini", "openai"
+    "openai",
+    "openai",
+    "openai",
+    "ollama",
+    "openai",
+    "openai",
+    "openai",
+    "openai",
+    "openai",
+    "openai",
+    "openai",
+    "openai",
+    "openai",
+    "openai",
+    "openai",
+    "anthropic",
+    "gemini",
+    "openai"
 };
 
 array<string> P_AUTH =
 {
-    "bearer", "bearer", "bearer", "bearer", "bearer", "bearer",
-    "bearer", "bearer", "bearer", "bearer", "bearer",
-    "none", "none", "none", "x-api-key", "x-api-key", "bearer"
+    "none",
+    "none",
+    "none",
+    "none",
+    "bearer",
+    "bearer",
+    "bearer",
+    "bearer",
+    "bearer",
+    "bearer",
+    "bearer",
+    "bearer",
+    "bearer",
+    "bearer",
+    "bearer",
+    "x-api-key",
+    "x-api-key",
+    "bearer"
 };
 
 // 鉴权头名（空 = 按 auth 类型取默认值）
 array<string> P_KEYNAME =
 {
-    "", "", "", "", "", "", "", "", "", "", "",
-    "", "", "", "x-api-key", "x-goog-api-key", ""
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "x-api-key",
+    "x-goog-api-key",
+    ""
 };
 
 // 追加到 OpenAI 兼容请求体尾部的厂商参数（含前导逗号；空 = 不追加）
@@ -189,14 +250,22 @@ array<string> P_KEYNAME =
 array<string> P_EXTRA =
 {
     "",
+    "",
+    "",
+    "",
+    "",
     ",\"thinking\":{\"type\":\"disabled\"}",
     "",
     "",
     ",\"enable_thinking\":false",
     ",\"enable_thinking\":false",
-    "", "", "", "", "",
-    "", "", "",
-    "", "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
     ""
 };
 
@@ -320,6 +389,7 @@ array<string> L_PROMPT =
     "古吉拉特语（Gujarati）"
 };
 
+
 // ===========================================================================
 // 翻译风格模板（opts: style=...）
 // ===========================================================================
@@ -376,16 +446,16 @@ bool StartsWith(const string &in s, const string &in prefix)
 string StrReplaceAll(const string &in src, const string &in from, const string &in to)
 {
     if (from.empty()) return src;
-    string out = src;
-    int pos = out.findFirst(from, 0);
+    string res = src;
+    int pos = res.findFirst(from, 0);
     int guard = 0;
     while (pos >= 0 && guard < 5000)
     {
-        out = out.Left(pos) + to + out.substr(pos + from.length());
-        pos = out.findFirst(from, pos + to.length());
+        res = res.Left(pos) + to + res.substr(pos + from.length());
+        pos = res.findFirst(from, pos + to.length());
         guard++;
     }
-    return out;
+    return res;
 }
 
 array<string> SplitStr(const string &in src, const string &in delim)
@@ -421,12 +491,12 @@ string JsonEscape(const string &in input)
     // JSON 字符串不允许裸的 C0 控制字符；字幕里出现的控制字符直接剔除，
     // 只保留稍后需要短转义的 \t \n \r（HostRegExpRemove 只删第一个匹配，故循环）
     string clean = StripChars(input, "[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]");
-    string out = StrReplaceAll(clean, "\\", "\\\\");
-    out = StrReplaceAll(out, "\"", "\\\"");
-    out = StrReplaceAll(out, "\n", "\\n");
-    out = StrReplaceAll(out, "\r", "\\r");
-    out = StrReplaceAll(out, "\t", "\\t");
-    return out;
+    string res = StrReplaceAll(clean, "\\", "\\\\");
+    res = StrReplaceAll(res, "\"", "\\\"");
+    res = StrReplaceAll(res, "\n", "\\n");
+    res = StrReplaceAll(res, "\r", "\\r");
+    res = StrReplaceAll(res, "\t", "\\t");
+    return res;
 }
 
 string JStr(const string &in v)
@@ -445,9 +515,9 @@ string MaskKey(const string &in k)
 string SafeUrl(const string &in url)
 {
     if (g_key.empty()) return url;
-    string out = StrReplaceAll(url, HostUrlEncode(g_key), "****");
-    out = StrReplaceAll(out, g_key, "****");
-    return out;
+    string res = StrReplaceAll(url, HostUrlEncode(g_key), "****");
+    res = StrReplaceAll(res, g_key, "****");
+    return res;
 }
 
 // 清洗数值参数：只保留数字与点，最多一个小数点，且必须能作为 JSON number
@@ -475,16 +545,16 @@ string NormalizeTemp(const string &in src)
 // HostRegExpRemove 只删第一个匹配；用于"删除所有匹配字符/片段"
 string StripChars(const string &in src, const string &in pattern)
 {
-    string out = src;
+    string res = src;
     int guard = 0;
     while (guard < 1024)
     {
-        string next = HostRegExpRemove(out, pattern);
-        if (next == out) break;
-        out = next;
+        string next = HostRegExpRemove(res, pattern);
+        if (next == res) break;
+        res = next;
         guard++;
     }
-    return out;
+    return res;
 }
 
 void Dbg(const string &in msg)
@@ -544,49 +614,50 @@ int PresetIndex(const string &in provider)
     return -1;
 }
 
+string JoinPresetIds()
+{
+    string res = "";
+    for (int i = 0; i < P_ID.size(); i++)
+    {
+        if (!res.empty()) res += "/";
+        res += P_ID[i];
+    }
+    return res;
+}
+
+// 取数字并夹到 [minValue, maxValue]；空输入用 fallback
+int ParseBoundedInt(const string &in src, int fallback, int minValue, int maxValue)
+{
+    string digits = StripChars(src, "[^0-9]");
+    if (digits.empty()) return fallback;
+    int value = 0;
+    array<string> ds = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
+    for (int i = 0; i < digits.length(); i++)
+    {
+        string ch = digits.substr(i, 1);
+        int d = -1;
+        for (int j = 0; j < 10; j++)
+        {
+            if (ds[j] == ch) { d = j; break; }
+        }
+        if (d < 0) continue;
+        value = value * 10 + d;
+        if (value >= maxValue) return maxValue;
+    }
+    if (value < minValue) return minValue;
+    return value;
+}
+
 // 解析登录框 User 字段；成功返回空串，失败返回中文错误
 // 语法: preset[:model][|opts]  或  custom|<endpoint>|<model>[|opts]
 int ParseContextLimit(const string &in src)
 {
-    string digits = StripChars(src, "[^0-9]");
-    if (digits.empty()) return 4;
-    int value = 0;
-    array<string> ds = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
-    for (int i = 0; i < digits.length(); i++)
-    {
-        string ch = digits.substr(i, 1);
-        int d = -1;
-        for (int j = 0; j < 10; j++)
-        {
-            if (ds[j] == ch) { d = j; break; }
-        }
-        if (d < 0) continue;
-        value = value * 10 + d;
-        if (value >= MAX_HISTORY) return MAX_HISTORY;
-    }
-    return value;
+    return ParseBoundedInt(src, 4, 0, MAX_HISTORY);
 }
 
 int ParseDeadline(const string &in src)
 {
-    string digits = StripChars(src, "[^0-9]");
-    if (digits.empty()) return 6000;
-    int value = 0;
-    array<string> ds = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
-    for (int i = 0; i < digits.length(); i++)
-    {
-        string ch = digits.substr(i, 1);
-        int d = -1;
-        for (int j = 0; j < 10; j++)
-        {
-            if (ds[j] == ch) { d = j; break; }
-        }
-        if (d < 0) continue;
-        value = value * 10 + d;
-        if (value >= 20000) return 20000;
-    }
-    if (value < 2000) return 2000;
-    return value;
+    return ParseBoundedInt(src, 6000, 2000, 20000);
 }
 
 string ParseSpec(const string &in specIn)
@@ -694,7 +765,7 @@ string ParseSpec(const string &in specIn)
     int idx = PresetIndex(provider);
     if (idx < 0)
     {
-        return "未知服务商: " + provider + "。可用: openai/deepseek/moonshot/zhipu/qwen/siliconflow/openrouter/groq/xai/mistral/together/lmstudio/vllm/ollama/anthropic/gemini/custom";
+        return "未知服务商: " + provider + "。可用: " + JoinPresetIds();
     }
 
     string base = isCustom ? baseOverride : P_BASE[idx];
@@ -770,10 +841,10 @@ string ParseSpec(const string &in specIn)
     g_temperature = temperature;
     g_max_tokens = maxTokens;
     g_probe = probe;
-    g_debug = (debug == "1" || debug == "true");
+    g_debug = (debug == "1" || debug.MakeLower() == "true");
     g_version = version;
     g_extra_body = extraBody;
-    g_minimal_body = (minimalOpt == "1" || minimalOpt == "true");
+    g_minimal_body = (minimalOpt == "1" || minimalOpt.MakeLower() == "true");
     g_style = style;
     g_context_limit = contextLimit;
     g_deadline_ms = deadlineMs;
@@ -788,8 +859,9 @@ string ParseSpec(const string &in specIn)
 
 int LangIndex(const string &in label)
 {
-    for (int i = 0; i < L_LABEL.size(); i++)
+    for (int i = 0; i < L_CODE.size(); i++)
     {
+        if (L_CODE[i] == label) return i;
         if (L_LABEL[i] == label) return i;
     }
     return -1;
@@ -848,14 +920,14 @@ string BuildHistoryText()
     int total = g_history_src.size();
     int start = total - g_context_limit;
     if (start < 0) start = 0;
-    string out = "";
+    string res = "";
     for (int i = start; i < total; i++)
     {
-        if (!out.empty()) out += "\n";
-        out += "- 原文：" + g_history_src[i] + "\n";
-        out += "  译文：" + g_history_dst[i];
+        if (!res.empty()) res += "\n";
+        res += "- 原文：" + g_history_src[i] + "\n";
+        res += "  译文：" + g_history_dst[i];
     }
-    return out;
+    return res;
 }
 
 int CacheFind(const string &in key)
@@ -1070,17 +1142,17 @@ string NodeText(JsonValue node)
     if (node.isString()) return node.asString();
     if (node.isArray())
     {
-        string out = "";
+        string res = "";
         for (int i = 0; i < node.size(); i++)
         {
             string t = NodeText(node[i]);
             if (!t.empty())
             {
-                if (!out.empty()) out += "\n";
-                out += t;
+                if (!res.empty()) res += "\n";
+                res += t;
             }
         }
-        return out;
+        return res;
     }
     if (node.isObject())
     {
@@ -1145,47 +1217,47 @@ string ExtractByPath(JsonValue root, const string &in path)
 
 array<string> ParseModelArray(JsonValue arr)
 {
-    array<string> out;
-    if (!arr.isArray()) return out;
+    array<string> res;
+    if (!arr.isArray()) return res;
     for (int i = 0; i < arr.size(); i++)
     {
         JsonValue item = arr[i];
         if (item.isString())
         {
-            out.insertLast(item.asString());
+            res.insertLast(item.asString());
             continue;
         }
         if (!item.isObject()) continue;
         JsonValue id = item["id"];
         if (id.isString())
         {
-            out.insertLast(id.asString());
+            res.insertLast(id.asString());
             continue;
         }
         JsonValue nm = item["name"];
         if (nm.isString())
         {
             string n = StrReplaceAll(nm.asString(), "models/", "");
-            out.insertLast(n);
+            res.insertLast(n);
         }
     }
-    return out;
+    return res;
 }
 
 array<string> ParseModels(const string &in content)
 {
-    array<string> out;
+    array<string> res;
     JsonReader reader;
     JsonValue root;
-    if (!reader.parse(content, root)) return out;
+    if (!reader.parse(content, root)) return res;
     if (root.isArray()) return ParseModelArray(root);
-    if (!root.isObject()) return out;
+    if (!root.isObject()) return res;
 
     JsonValue data = root["data"];
     if (data.isArray()) return ParseModelArray(data);
     JsonValue models = root["models"];
     if (models.isArray()) return ParseModelArray(models);
-    return out;
+    return res;
 }
 
 bool ModelMatched(array<string> models, const string &in model)
@@ -1204,16 +1276,16 @@ bool ModelMatched(array<string> models, const string &in model)
 
 string JoinModels(array<string> models, int maxCount)
 {
-    string out = "";
+    string res = "";
     int n = models.size();
     if (n > maxCount) n = maxCount;
     for (int i = 0; i < n; i++)
     {
-        if (!out.empty()) out += ", ";
-        out += models[i];
+        if (!res.empty()) res += ", ";
+        res += models[i];
     }
-    if (models.size() > maxCount) out += " ...";
-    return out;
+    if (models.size() > maxCount) res += " ...";
+    return res;
 }
 
 string ProbeUrl()
@@ -1234,15 +1306,12 @@ string Probe()
     string url = ProbeUrl();
     if (url.empty()) return "";
 
-    HostIncTimeOut(20000);
-    uintptr http = HostOpenHTTP(url, USER_AGENT, BuildHeaders(), "", true);
-    if (http == 0)
+    int status = 0;
+    string content = "";
+    if (!HttpExchange(url, BuildHeaders(), "", 20000, status, content))
     {
         return "无法连接 " + g_base + "（检查地址、端口、网络或代理）";
     }
-    int status = HostGetStatusHTTP(http);
-    string content = HostGetContentHTTP(http);
-    HostCloseHTTP(http);
 
     if (status == 401 || status == 403)
     {
@@ -1422,14 +1491,14 @@ bool IsSpaceOrPunct(const string &in ch)
 
 string SimplifiedForEcho(const string &in s)
 {
-    string out = "";
+    string res = "";
     for (int i = 0; i < s.length(); i++)
     {
         string ch = s.substr(i, 1);
         if (IsSpaceOrPunct(ch)) continue;
-        out += ch;
+        res += ch;
     }
-    return out.MakeLower();
+    return res.MakeLower();
 }
 
 bool LooksLikeLatinSentence(const string &in s)
@@ -1524,26 +1593,66 @@ bool IsNonDialogueText(const string &in s)
     return false;
 }
 
+// PotPlayer“测试”按钮把固定的测试句传给 Translate；只在此时返回可见错误，
+// 正常播放路径仍然保持静默，避免把错误显示成字幕。
+bool IsSelfTestText(const string &in s)
+{
+    if (s.findFirst("实时字幕翻译测试", 0) >= 0) return true;
+    if (s.findFirst("PotPlayer can support online translation", 0) >= 0) return true;
+    return false;
+}
+
+// 测试按钮的返回值由宿主按 ANSI 显示；这里只用 ASCII，避免中文变乱码。
+string TestErrorHint()
+{
+    int status = g_http_status;
+    if (status == 0) return "network unreachable";
+    if (status == 401 || status == 403) return "API key invalid or no permission";
+    if (status == 402) return "insufficient balance";
+    if (status == 404) return "endpoint or model not found";
+    if (status == 413) return "request too large";
+    if (status == 422) return "invalid request parameters";
+    if (status == 429) return "rate limited; retry later";
+    if (status >= 500) return "server error (HTTP " + formatInt(status) + ")";
+    if (status == 200) return "HTTP 200 but no translation; check model and path";
+    if (status > 0) return "HTTP " + formatInt(status);
+    return "unknown error";
+}
+
 // ===========================================================================
 // HTTP 发送
 // ===========================================================================
+
+// 单次同步 HTTP 交换：打开、取状态/内容、关闭。
+// 超时只在这里设置；调用方负责解释状态码和错误体。
+bool HttpExchange(const string &in url, const string &in headers, const string &in body,
+                  int timeoutMs, int &outStatus, string &outContent)
+{
+    outStatus = 0;
+    outContent = "";
+    HostIncTimeOut(timeoutMs);
+
+    uintptr http = HostOpenHTTP(url, USER_AGENT, headers, body, true);
+    if (http == 0) return false;
+    outStatus = HostGetStatusHTTP(http);
+    outContent = HostGetContentHTTP(http);
+    HostCloseHTTP(http);
+    return true;
+}
 
 bool SendOnce(const string &in url, const string &in headers, const string &in body,
               string &out text, int timeoutMs)
 {
     text = "";
-    HostIncTimeOut(timeoutMs);
 
-    uintptr http = HostOpenHTTP(url, USER_AGENT, headers, body, true);
-    if (http == 0)
+    int status = 0;
+    string content = "";
+    if (!HttpExchange(url, headers, body, timeoutMs, status, content))
     {
         g_http_status = 0;
         Dbg("network error: " + SafeUrl(url));
         return false;
     }
-    int status = HostGetStatusHTTP(http);
-    string content = HostGetContentHTTP(http);
-    HostCloseHTTP(http);
 
     g_http_status = status;
     g_http_body = content;
@@ -1639,7 +1748,13 @@ int RemainingBudget(uint startTick)
 string Translate(string Text, string &in SrcLang, string &in DstLang)
 {
     string raw = Text;
+    bool selfTest = IsSelfTestText(raw);
     if (Trimmed(raw).empty()) return "";
+
+    if (selfTest && HostLoadString("anytr_spec", "").empty() && HostLoadString("anytr_key", "").empty())
+    {
+        return "AnyTranslate test: not configured; set provider/model and API Key first";
+    }
 
     if (IsNonDialogueText(raw))
     {
@@ -1666,11 +1781,13 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
     if (g_logged_out)
     {
         Dbg("skip translate: logged out");
+        if (selfTest) return "AnyTranslate test: not logged in; configure and login first";
         return "";
     }
     if (g_base.empty())
     {
         Dbg("skip translate: empty base URL");
+        if (selfTest) return "AnyTranslate test: base URL is empty";
         return "";
     }
 
@@ -1685,6 +1802,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
     if (dstLabel.empty() || dstLabel == "Auto" || dstLabel == "自动检测")
     {
         Dbg("skip translate: no destination language (DstLang=" + DstLang + ")");
+        if (selfTest) return "AnyTranslate test: destination language is not selected";
         return "";
     }
 
@@ -1818,6 +1936,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
             g_fail_count = 0;
             ClearHistory();
         }
+        if (selfTest) return "AnyTranslate test failed: " + TestErrorHint();
         return "";
     }
 
@@ -1863,7 +1982,7 @@ string ServerLogin(string User, string Pass)
         g_last_error = "缺少 API Key";
         return "请在密码框填写 API Key（本机服务可把 auth 设为 none）";
     }
-    if (g_model.empty() && (g_proto == "anthropic" || g_proto == "gemini"))
+    if (g_model.empty() && (g_proto == "anthropic" || g_proto == "gemini" || g_proto == "ollama"))
     {
         g_logged_out = true;
         g_last_error = "缺少模型名";
@@ -1935,10 +2054,10 @@ void OnFinalize()
 array<string> GetSrcLangs()
 {
     array<string> ret;
-    ret.insertLast("自动检测");
-    for (int i = 0; i < L_LABEL.size(); i++)
+    ret.insertLast(""); // 空字符串表示自动检测
+    for (int i = 0; i < L_CODE.size(); i++)
     {
-        ret.insertLast(L_LABEL[i]);
+        ret.insertLast(L_CODE[i]);
     }
     return ret;
 }
@@ -1946,9 +2065,9 @@ array<string> GetSrcLangs()
 array<string> GetDstLangs()
 {
     array<string> ret;
-    for (int i = 0; i < L_LABEL.size(); i++)
+    for (int i = 0; i < L_CODE.size(); i++)
     {
-        ret.insertLast(L_LABEL[i]);
+        ret.insertLast(L_CODE[i]);
     }
     return ret;
 }

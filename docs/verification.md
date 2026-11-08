@@ -21,9 +21,10 @@ python -m unittest tests.test_static -v
 → Ran 1 test / OK
 ```
 
-覆盖：括号/花括号配平、14 个入口点齐全、语言表长度一致且无重复、
-`P_*` 预设表与 `P_ID` 等长、`STYLE_IDS`/`STYLE_RULES` 等长且无重复、
-`Host*` 调用全部存在于签名列表
+覆盖：括号/花括号配平、14 个入口点齐全、语言表 `L_CODE/L_LABEL/L_PROMPT` 长度一致且无重复、
+`P_*` 预设表与 `P_ID` 等长、本机预设位于表头且模型留空、`STYLE_IDS`/`STYLE_RULES` 等长且无重复、
+`GetTitle` 语言标签顺序、`Host*` 调用全部存在于签名列表、保留字 `out` 仅允许出现在
+`&out` 参数或字面量中、安装脚本保留 PS5.1 所需 UTF-8 BOM
 （默认 `docs/api-signatures.txt`，Windows 上可自动探测 `Extension\api.txt`）、
 无重复函数定义。
 
@@ -36,7 +37,7 @@ pwsh -NoProfile -File tests/run_tests.ps1
 → 通过率 100%，mock 冒烟通过，结果 PASS
 ```
 
-覆盖 215 项契约用例 + 1 项静态检查：17 个 spec 形式（16 预设 + custom）、四种协议 URL/头/体、
+覆盖 215 项契约用例 + 1 项静态检查：18 个 spec 形式（17 预设 + custom）、四种协议 URL/头/体、
 `style`/`context`/`deadline` 选项、目标语言排版规则、非对白过滤、
 提示词模板与译文质量门（回显/脚本/超长）、
 登录自检（`/models`、`/api/tags`、`/v1/models`、`/v1beta/models`）、

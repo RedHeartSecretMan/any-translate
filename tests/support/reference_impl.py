@@ -56,8 +56,8 @@ DEFAULT_ANTHROPIC_MAX_TOKENS = 1024
 DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_TIMEOUT = 30.0
 
-PROBE_TIMEOUT = 15.0  # .as Probe(): HostIncTimeOut(15000)
-SEND_TIMEOUT = 20.0  # .as SendOnce(): HostIncTimeOut(20000)
+PROBE_TIMEOUT = 20.0  # .as Probe(): HostIncTimeOut(20000)
+SEND_TIMEOUT = 6.0  # .as Translate(): default per-cue deadline (6000 ms)
 
 KIND_OPENAI = "openai"
 KIND_ANTHROPIC = "anthropic"
@@ -171,6 +171,10 @@ class Preset:
 
 #: 全部 provider 预设（顺序与 .as P_ID 一致；改这里必须同步 .as 与 DESIGN §5.1）
 PRESETS: Dict[str, Preset] = {
+    "vllm": Preset("vllm", "http://127.0.0.1:8000/v1", KIND_OPENAI, "none"),
+    "sglang": Preset("sglang", "http://127.0.0.1:30000/v1", KIND_OPENAI, "none"),
+    "lmstudio": Preset("lmstudio", "http://127.0.0.1:1234/v1", KIND_OPENAI, "none"),
+    "ollama": Preset("ollama", "http://127.0.0.1:11434", KIND_OLLAMA, "none"),
     "openai": Preset("openai", "https://api.openai.com/v1", KIND_OPENAI, "bearer",
                      default_model="gpt-5.6-terra"),
     "deepseek": Preset("deepseek", "https://api.deepseek.com/v1", KIND_OPENAI, "bearer",
@@ -191,15 +195,11 @@ PRESETS: Dict[str, Preset] = {
     "groq": Preset("groq", "https://api.groq.com/openai/v1", KIND_OPENAI, "bearer",
                    default_model="openai/gpt-oss-120b"),
     "xai": Preset("xai", "https://api.x.ai/v1", KIND_OPENAI, "bearer",
-                  default_model="grok-4.20"),
+                  default_model="grok-4.7"),
     "mistral": Preset("mistral", "https://api.mistral.ai/v1", KIND_OPENAI, "bearer",
                       default_model="mistral-small-latest"),
     "together": Preset("together", "https://api.together.ai/v1", KIND_OPENAI, "bearer",
                        default_model="meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-    "lmstudio": Preset("lmstudio", "http://127.0.0.1:1234/v1", KIND_OPENAI, "none"),
-    "vllm": Preset("vllm", "http://127.0.0.1:8000/v1", KIND_OPENAI, "none"),
-    "ollama": Preset("ollama", "http://127.0.0.1:11434", KIND_OLLAMA, "none",
-                     default_model="qwen3:4b"),
     "anthropic": Preset("anthropic", "https://api.anthropic.com", KIND_ANTHROPIC,
                         "x-api-key", keyname="x-api-key",
                         default_model="claude-sonnet-4-6"),
@@ -1429,7 +1429,7 @@ def login(
             return False, _err(
                 "auth_needed", "请在密码框填写 API Key（本机服务可把 auth 设为 none）"
             )
-        if not spec.model and spec.kind in (KIND_ANTHROPIC, KIND_GEMINI):
+        if not spec.model and spec.kind in (KIND_ANTHROPIC, KIND_GEMINI, KIND_OLLAMA):
             return False, _err(
                 "config_error", f"该服务必须指定模型名，例如 {spec.preset}:<model>"
             )

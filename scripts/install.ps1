@@ -92,6 +92,10 @@ if ($Uninstall) {
             }
         }
     }
+    if ($DryRun) {
+        Write-Host "dry run 完成：未删除任何文件。"
+        exit 0
+    }
     Write-Host "卸载完成。请重启 PotPlayer。"
     exit 0
 }
@@ -101,7 +105,7 @@ if (-not (Test-Path $pluginFile)) {
 }
 
 $proc = Get-Process -Name "PotPlayerMini64", "PotPlayer64" -ErrorAction SilentlyContinue
-if ($proc) {
+if ($proc -and -not $DryRun) {
     Write-Warning "检测到 PotPlayer 正在运行，建议先关闭；已继续复制，重启 PotPlayer 后才会生效。"
 }
 
@@ -129,5 +133,9 @@ foreach ($pair in @(@($pluginFile, $targetAs), @($iconFile, $targetIco))) {
 }
 
 Write-Host ""
+if ($DryRun) {
+    Write-Host "dry run 完成：未修改任何文件。"
+    exit 0
+}
 Write-Host "安装完成。请重启 PotPlayer，然后在 字幕 -> 实时字幕翻译 中选择 AnyTranslate。"
 Write-Host "配置方法见 README.md。"

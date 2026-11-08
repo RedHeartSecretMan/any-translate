@@ -7,7 +7,7 @@
 
 - 请求：`POST`，`Content-Type: application/json`，UTF-8；**不要开流式**（插件一次只要最终文本）。
 - 鉴权：OpenAI 兼容族 `Authorization: Bearer <key>`；Anthropic `x-api-key`（2026 文档推荐 `Authorization: Bearer`，旧头仍兼容）；Gemini `?key=` 或 `x-goog-api-key`；Ollama 无鉴权。
-- 超时 10 s；`429`/`5xx` 退避重试 ≤ 2 次；`400` 不重试，改用最小请求体降级。
+- 单条字幕总预算默认 6 s（`deadline=2000..20000`）；预算内 `429`/`5xx` 退避重试 1 次；`400` 仅在错误文本提示参数不支持时改用最小请求体重试 1 次。
 - 译文提取 = 一个 JSON path（§8）；错误提取 = 优先 `error.message`，退化到 `message` / `code` / 原始 body。
 
 ## 1. OpenAI Chat Completions 兼容族
@@ -61,6 +61,10 @@ curl -sS https://api.openai.com/v1/chat/completions \
 
 | 服务 | 完整请求 URL（POST） | 示例 model | 2026 要点 |
 | --- | --- | --- | --- |
+| vLLM | `http://localhost:8000/v1/chat/completions` | 启动参数 `--served-model-name` | 无鉴权；插件默认留空，需指定时写 `vllm:<served-name>`；推理解析需启动 `--reasoning-parser` |
+| SGLang | `http://localhost:30000/v1/chat/completions` | `--served-model-name` | 无鉴权；插件默认留空，需指定时写 `sglang:<served-name>` |
+| LM Studio | `http://localhost:1234/v1/chat/completions` | `/v1/models` 返回的 id | 无鉴权；插件默认留空，服务端要求 `model` 时写 `lmstudio:<id>` |
+| Ollama | `http://localhost:11434/api/chat` | `ollama list` 里的名字 | 无鉴权；`model` 必填，使用 `ollama:<model>`（插件默认不猜） |
 | OpenAI | `https://api.openai.com/v1/chat/completions` | `gpt-5.6-terra` | 推理模型用 `max_completion_tokens`；`temperature` 支持因模型而异 |
 | DeepSeek | `https://api.deepseek.com/chat/completions`（`/v1` 亦可） | `deepseek-v4-flash` | **thinking 默认开启**，翻译必须显式关；错误码含 402/422 |
 | Moonshot Kimi | 国内 `https://api.moonshot.cn/v1/chat/completions`；国际 `https://api.moonshot.ai/v1/chat/completions` | `kimi-k3.1-pro` | 响应含 `reasoning_content`；两种域名 key 不通用 |
@@ -69,11 +73,9 @@ curl -sS https://api.openai.com/v1/chat/completions \
 | 硅基流动 SiliconFlow | `https://api.siliconflow.cn/v1/chat/completions`（国际 `https://api.siliconflow.com/v1/chat/completions`） | `deepseek-ai/DeepSeek-V4-Flash` | 非标准参数 `enable_thinking` / `thinking_budget`；`max_tokens` 不含思维链 |
 | OpenRouter | `https://openrouter.ai/api/v1/chat/completions` | `openai/gpt-5.6-terra` | `model` 为 `厂商/模型`；`HTTP-Referer`/`X-Title` 可选 |
 | Groq | `https://api.groq.com/openai/v1/chat/completions` | `openai/gpt-oss-120b` | `n` 只能为 1（否则 400）；`max_tokens` 已弃用 |
-| xAI | `https://api.x.ai/v1/chat/completions` | `grok-4.20` | 采样参数超出模型上限会被截到上限，不报错 |
+| xAI | `https://api.x.ai/v1/chat/completions` | `grok-4.7` | 采样参数超出模型上限会被截到上限，不报错 |
 | Mistral | `https://api.mistral.ai/v1/chat/completions` | `mistral-small-latest` | 仍用 `max_tokens`；`response_format` 支持 `json_object` |
-| Together | `https://api.together.ai/v1/chat/completions`（旧 `api.together.xyz`） | `Qwen/Qwen3.5-9B` | 2026 官方 server 为 `api.together.ai` |
-| LM Studio | `http://localhost:1234/v1/chat/completions` | `/v1/models` 返回的 id | 无鉴权；`model` 必填且必须匹配已加载模型 |
-| vLLM | `http://localhost:8000/v1/chat/completions` | 启动参数 `--served-model-name` | `model` 必须是 served name；推理解析需启动 `--reasoning-parser` |
+| Together | `https://api.together.ai/v1/chat/completions`（旧 `api.together.xyz`） | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | 2026 官方 server 为 `api.together.ai` |
 | one-api / new-api | `http://host:3000/v1/chat/completions` | 渠道映射后的名字 | 模型映射开启时会重构请求体，未识别字段可能丢失 |
 
 ### 1.4 会导致 400 的参数差异（重点）
@@ -110,7 +112,7 @@ curl -sS https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_
 }
 ```
 
-校验规则：HTTP 200 + `data[].id` 包含配置的 model（忽略大小写）。部分服务（LM Studio、vLLM、one-api）忽略鉴权或返回精简结构，只要 `data` 数组存在即可判 Key 有效。
+校验规则：HTTP 200 + `data[].id` 包含配置的 model（忽略大小写）。部分服务（vLLM、LM Studio、one-api）忽略鉴权或返回精简结构，只要 `data` 数组存在即可判 Key 有效。
 
 ## 2. Anthropic Messages API（[文档](https://docs.anthropic.com/en/api/messages)）
 
@@ -250,7 +252,7 @@ curl -sS "https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_AP
 
 模型名要带 `models/` 前缀返回，调用 URL 里写 `models/{id}`；登录校验时去掉前缀再与配置比较。
 
-## 4. Ollama 原生 API（[文档](https://docs.ollama.com/api/chat)）
+## 4. Ollama API（[文档](https://docs.ollama.com/api/chat)）
 
 ### 4.1 `/api/chat` 请求
 
@@ -313,7 +315,7 @@ curl -sS http://localhost:11434/api/tags
 
 design.md 的 `custom|<base_url>|<model>|[opts]` 用 body 模板 + 响应路径覆盖任意 REST 翻译接口（参考 [DeepL](https://developers.deepl.com/docs/api-reference/translate)、[Google v2](https://cloud.google.com/translate/docs/reference/rest/v2/translate)、[LibreTranslate](https://libretranslate.com/docs/)）。
 
-- 请求体模板：`body={"q":"{{text}}","source":"{{src}}","target":"{{dst}}","format":"text"}`（`{{prompt}}` 为完整提示词，`{{model}}` 为模型名）。
+- 请求体模板：`body={"q":"{{text}}","source":"{{src}}","target":"{{dst}}","format":"text"}`（`{{prompt}}` 为完整提示词，`{{model}}` 为模型名；`{{src}}`/`{{dst}}` 是提示词里的语言显示名，不是语言码，LibreTranslate 等需要 code 的接口请写固定 `source`/`target`）。
 - 占位符替换前先做 JSON 转义（`\`、`"`、换行、控制字符），否则含引号的字幕会破坏 JSON。
 - 路径语法：点号 + 单层下标，如 `translatedText`、`data.translations[0].translatedText`；终值为数组时逐项取 `text`/`content` 拼接。
 - `auth`：`bearer`（`Authorization: Bearer <key>`）、`x-api-key`、`query`（拼 `?<keyname>=<key>`）、`none`。
@@ -368,7 +370,7 @@ google 系响应可能对文本做 HTML 实体转义（`&#39;`），插件侧需
 | 单次延迟 p50 | 国内云非推理 0.3–1.0 s；海外/代理 0.8–3 s；推理模型 2–30 s |
 | 成本量级 | 每 1000 条字幕约 ¥0.01–0.5，随模型价差大 |
 
-建议：一次一条 cue、不带历史（或只带 1–2 句上文）、固定短 system prompt、关闭思考、`stream:false`、HTTP 超时 10 s。实时字幕场景不要用推理模型。
+建议：一次一条 cue、不带历史（或只带 1–2 句上文）、固定短 system prompt、关闭思考、`stream:false`、单条总预算 6 s（可按需 2000–20000 ms）。实时字幕场景不要用推理模型。
 
 ## 8. 插件侧解析规则清单
 
@@ -395,4 +397,4 @@ google 系响应可能对文本做 HTML 实体转义（`&#39;`），插件侧需
 
 待验证：GLM `temperature` 上限与错误体；Mistral 错误体；SiliconFlow 错误体；Kimi/GLM 思考模式对 `temperature` 的约束；Gemini `thinkingBudget: 0` 在全部模型上的效果；Ollama `message.thinking` 字段名；Anthropic `anthropic-version: 2023-06-01` 在 2026 是否仍被接受。
 
-与 `docs/design.md` 预设表的差异（2026 核对）：Anthropic 版本头示例已为 `2026-10-21`；DeepSeek 模型为 `deepseek-v4-flash`/`deepseek-v4-pro` 且 thinking 默认开；Kimi 为 `kimi-k3.1-pro`；GLM 为 `glm-5.3`；DashScope 建议迁移 workspace 专属域名；Together 官方 server 为 `api.together.ai`。预设表中的旧模型名（`gpt-4o-mini`、`deepseek-chat`、`qwen-plus`、`gemini-2.0-flash` 等）需在代码与文档中同步更新为当前可用模型。
+与 `docs/design.md` 预设表的差异（2026-11 核对）：Anthropic 版本头示例可用 `2026-10-21`（代码默认仍为 `2023-06-01`，可用 `version=` 覆盖）；DeepSeek 模型为 `deepseek-v4-flash`/`deepseek-v4-pro` 且 thinking 默认开；Kimi 为 `kimi-k3.1-pro`；GLM 为 `glm-5.3`；DashScope 建议迁移 workspace 专属域名；Together 官方 server 为 `api.together.ai`。预设表已同步为当前示例模型；模型名仍会变化，以各服务 `/models` 为准。

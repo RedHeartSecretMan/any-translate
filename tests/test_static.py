@@ -15,6 +15,8 @@ plugin fail to load or misbehave silently:
   * every ``P_*`` preset table has the same length
   * the two ``STYLE_*`` tables have the same length and no duplicates
   * every ``Host*`` API call exists in a PotPlayer API signature list
+  * the PowerShell installer keeps its UTF-8 BOM for Windows PowerShell 5.1
+  * the AngelScript reserved word ``out`` is not used as an identifier
   * no duplicate top-level function definitions
 
 The API list defaults to the checked-in ``docs/api-signatures.txt`` so the
@@ -193,6 +195,19 @@ def collect_problems() -> list[str]:
         if not re.search(r"\b" + entry + r"\s*\(", code):
             problems.append(f"missing entry point: {entry}")
 
+    title_tags = ("CP936", "CP950", "CP949", "CP932", "CP0")
+    title_positions = []
+    for tag in title_tags:
+        marker = "{$" + tag + "="
+        if marker not in text:
+            problems.append(f"GetTitle missing {tag} branch")
+        else:
+            title_positions.append(text.find(marker))
+    if len(title_positions) == len(title_tags) and title_positions != sorted(title_positions):
+        problems.append(
+            "GetTitle language order must be CP936, CP950, CP949, CP932, CP0"
+        )
+
     names = ARRAY_RE.findall(text)
     language_arrays = [name for name in names if name.startswith("L_")]
     for required in ("L_CODE", "L_LABEL", "L_PROMPT"):
@@ -229,6 +244,18 @@ def collect_problems() -> list[str]:
                 problems.append(f"missing preset table: {name}")
         if len(set(lengths.values())) > 1:
             problems.append(f"preset table length mismatch: {lengths}")
+        try:
+            preset_ids = extract_array(text, "P_ID")
+            preset_models = extract_array(text, "P_MODEL")
+        except ValueError:
+            preset_ids = []
+            preset_models = []
+        local_prefix = ["vllm", "sglang", "lmstudio", "ollama"]
+        if preset_ids[:4] != local_prefix:
+            problems.append(f"P_ID local prefix mismatch: {preset_ids[:4]}")
+        for index, preset in enumerate(local_prefix):
+            if index < len(preset_models) and preset_models[index] != "":
+                problems.append(f"P_MODEL must stay empty for {preset}")
 
     style_arrays = [name for name in names if name.startswith("STYLE_")]
     for required in ("STYLE_IDS", "STYLE_RULES"):
@@ -275,12 +302,26 @@ def collect_problems() -> list[str]:
     if duplicate_functions:
         problems.append(f"duplicate function definitions: {duplicate_functions}")
 
+    # PotPlayer's AngelScript compiler treats out as a reserved keyword; only
+    # the &out parameter / literal phrase may use it.
+    for line_number, line in enumerate(code.splitlines(), 1):
+        if "&out" in line or "logged out" in line:
+            continue
+        if re.search(r"\bout\b", line):
+            problems.append(f"reserved word out at line {line_number}")
+
     return problems
 
 
 class PluginStaticTest(unittest.TestCase):
     def test_plugin_contract(self) -> None:
         problems = collect_problems()
+        installer = PROJECT / "scripts" / "install.ps1"
+        if installer.exists():
+            raw = installer.read_bytes()
+            if not raw.startswith(b"\xef\xbb\xbf"):
+                problems.append("scripts/install.ps1 must keep a UTF-8 BOM for Windows PowerShell 5.1")
+
         self.assertEqual(problems, [], "静态检查失败:\n" + "\n".join(f"  - {p}" for p in problems))
 
 

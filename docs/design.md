@@ -9,7 +9,7 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 本项目目标：
 
 - 用一个插件接入多类 API：OpenAI 兼容端点、DeepSeek、Kimi、智谱、硅基流动、
-  OpenRouter、Anthropic、Gemini、LM Studio、vLLM、Ollama，以及任意自定义 JSON 接口；
+  OpenRouter、Anthropic、Gemini、vLLM、SGLang、LM Studio、Ollama，以及任意自定义 JSON 接口；
 - 配置收敛到登录框的两个输入框（spec + API Key），不要求用户改源码；
 - 登录时自检 Key 与模型名，失败给出可操作的中文提示；
 - 实时字幕场景优先：上下文、缓存、超时控制、失败静默不污染字幕；
@@ -64,31 +64,34 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 
 1. **登录框只有两个输入框**：`User` 承载服务 spec，`Pass` 承载 API Key。
    因此 spec 必须是一行可读、可粘贴的短语法。
-2. **脚本 API 版本以实际构建为准**：`HostGetStatusHTTP` 等函数已在本机
+2. **宿主不提供自定义下拉控件**：服务商与模型只能写在 spec 里；登录自检返回的
+   模型列表用于提示和校验，不能渲染成可选择的下拉框。
+3. **脚本 API 版本以实际构建为准**：`HostGetStatusHTTP` 等函数已在本机
    26.10.21.0 的 `PotPlayer64.dll` 中确认存在；官方 `LM Studio.as` 已实际使用
    `HostOpenHTTP`。README 标注最低版本要求。
-3. **无自动化测试环境**：AngelScript 在本机无法直接执行，验证见第 9 节。
+4. **无自动化测试环境**：AngelScript 在本机无法直接执行，验证见第 9 节。
 
 ## 4. 插件契约
 
 ```
-string GetTitle()                       -> "{$CP949=AnyTranslate 번역$}{$CP950=AnyTranslate 翻譯$}{$CP0=AnyTranslate}"
+string GetTitle()                       -> "{$CP936=AnyTranslate 翻译$}{$CP950=AnyTranslate 翻譯$}{$CP949=AnyTranslate 번역$}{$CP932=AnyTranslate 翻訳$}{$CP0=AnyTranslate}"
 string GetVersion()                     -> "0.1.0"
-string GetDesc()                        -> 一句话说明 + 文档地址
+string GetDesc()                        -> 一句话说明
 string GetLoginTitle()                  -> 配置说明标题
-string GetLoginDesc()                   -> spec 语法示例
-string GetUserText()                    -> "服务: <当前 spec 摘要>"
-string GetPasswordText()                -> "API Key: <脱敏>"
+string GetLoginDesc()                   -> 一行 spec 示例
+string GetUserText()                    -> "服务："
+string GetPasswordText()                -> "API Key："
 string ServerLogin(string User, string Pass) -> "200 ok" 或中文错误
 void   ServerLogout()
-array<string> GetSrcLangs()             -> ["自动检测", ...]
-array<string> GetDstLangs()             -> [...]
+array<string> GetSrcLangs()             -> ["", "zh-CN", "zh-TW", "en", ...]
+array<string> GetDstLangs()             -> ["zh-CN", "zh-TW", "en", ...]
 string Translate(string Text, string &in SrcLang, string &in DstLang)
 void OnInitialize() / void OnFinalize()
 ```
 
-失败约定：`Translate` 返回空串（与 google、DeepL、LM Studio 官方插件一致），
-不把错误文案混进字幕；`ServerLogin` 返回非 `200 ok` 时 PotPlayer 会弹错误。
+失败约定：`Translate` 正常播放时返回空串（与 google、DeepL、LM Studio 官方插件一致），
+不把错误文案混进字幕；PotPlayer“测试”按钮传入固定测试句时返回可见的 ASCII 诊断信息；
+`ServerLogin` 返回非 `200 ok` 时 PotPlayer 会弹错误。
 
 ## 5. 配置语法
 
@@ -112,12 +115,16 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
   OpenAI / Anthropic 官方接口会以 401 明确失败；
 - `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`（无转义机制）；
 - `Pass` 字段单独承载 API Key；Key 为空时沿用上次保存值；
-- 空 spec 使用上次保存的 spec，首次默认 `ollama:qwen3:4b`。
+- 空 spec 使用上次保存的 spec，首次默认 `ollama:qwen3:4b`（显式指定模型，保证首装可用；`ollama` 预设本身不猜模型）。
 
 ### 5.1 预设表
 
 | preset | base URL | 默认模型 | 协议 | 鉴权 |
 | --- | --- | --- | --- | --- |
+| `vllm` | `http://127.0.0.1:8000/v1` | 服务端默认模型（留空） | OpenAI 兼容 | 无 |
+| `sglang` | `http://127.0.0.1:30000/v1` | 服务端默认模型（留空） | OpenAI 兼容 | 无 |
+| `lmstudio` | `http://127.0.0.1:1234/v1` | 服务端默认模型（留空） | OpenAI 兼容 | 无 |
+| `ollama` | `http://127.0.0.1:11434` | 留空（用 `ollama:<model>` 指定） | Ollama | 无 |
 | `openai` | `https://api.openai.com/v1` | `gpt-5.6-terra` | OpenAI 兼容 | Bearer |
 | `deepseek` | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | OpenAI 兼容（关闭思考） | Bearer |
 | `moonshot` | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` | OpenAI 兼容 | Bearer |
@@ -126,12 +133,9 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 | `siliconflow` | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V4-Flash` | OpenAI 兼容（关闭思考） | Bearer |
 | `openrouter` | `https://openrouter.ai/api/v1` | `openai/gpt-5.6-terra` | OpenAI 兼容 | Bearer |
 | `groq` | `https://api.groq.com/openai/v1` | `openai/gpt-oss-120b` | OpenAI 兼容 | Bearer |
-| `xai` | `https://api.x.ai/v1` | `grok-4.20` | OpenAI 兼容 | Bearer |
+| `xai` | `https://api.x.ai/v1` | `grok-4.7` | OpenAI 兼容 | Bearer |
 | `mistral` | `https://api.mistral.ai/v1` | `mistral-small-latest` | OpenAI 兼容 | Bearer |
 | `together` | `https://api.together.ai/v1` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | OpenAI 兼容 | Bearer |
-| `lmstudio` | `http://127.0.0.1:1234/v1` | 服务端默认模型 | OpenAI 兼容 | 无 |
-| `vllm` | `http://127.0.0.1:8000/v1` | 服务端默认模型 | OpenAI 兼容 | 无 |
-| `ollama` | `http://127.0.0.1:11434` | `qwen3:4b` | Ollama 原生 | 无 |
 | `anthropic` | `https://api.anthropic.com` | `claude-sonnet-4-6` | Anthropic | `x-api-key` |
 | `gemini` | `https://generativelanguage.googleapis.com` | `gemini-3.5-flash` | Gemini | `x-goog-api-key` 头 |
 | `custom` | 用户自填完整请求地址 | 用户自填 | 默认 OpenAI 兼容 | Bearer |
@@ -146,10 +150,10 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 | `path` | 响应中的译文 JSON 路径，支持 `a.b[0].c` | 按协议默认 |
 | `auth` | `bearer` / `x-api-key` / `query` / `none` | `bearer` |
 | `keyname` | 鉴权头名或 query 参数名 | `Authorization` / `x-api-key` / `key` |
-| `body` | 请求体模板，占位符 `{{prompt}}` `{{text}}` `{{model}}` `{{src}}` `{{dst}}` | OpenAI 兼容体 |
+| `body` | 请求体模板，占位符 `{{prompt}}` `{{text}}` `{{model}}` `{{src}}` `{{dst}}`（后两者是语言显示名，不是语言码） | OpenAI 兼容体 |
 | `temp` | 采样温度 | `0.2` |
-| `max_tokens` | 输出上限（默认不发送，避免推理模型 400） | 不发送 |
-| `minimal` | `1` = 强制最小请求体（只带 model/messages/stream） | `0` |
+| `max_tokens` | 输出上限（默认不发送；Anthropic 必填，默认 1024） | 不发送 |
+| `minimal` | `1` = 强制最小请求体（只带 model/messages/stream；custom 带 body 模板时仍优先模板） | `0` |
 | `version` | Anthropic `anthropic-version` 头 | `2023-06-01` |
 | `probe` | 登录自检：`models` 或 `none` | `custom` 默认 `none`，其余 `models` |
 | `debug` | `1` 打开控制台诊断日志（Key 脱敏） | `0` |
@@ -254,9 +258,9 @@ JSON 字符串一律经 `JsonEscape`：先剔除 JSON 不允许的 C0 控制字�
 | 200 但译文为空 | 预算内用最小体重试 1 次（常见于思考内容占满预算）；若最小体与当前体相同则跳过 |
 | 译文回显原文 / 目标文字脚本缺失 / 严重超长 | 预算内用更强硬提示词重试 1 次；仍不合格则本次返回空串，不写缓存 |
 | 剩余预算不足 | 不再发起降级/重试；直接按当前失败结果处理，避免阻塞下一条字幕 |
-| JSON 解析失败 / 译文为空 | 静默返回空串 |
+| JSON 解析失败 / 路径不存在 / 译文为空（HTTP 200） | 用最小体重试 1 次；仍失败则静默返回空串 |
 | 连续失败 ≥ 5 次 | 清空上下文（保留缓存），避免污染后续翻译 |
-| 登录自检失败 | 置运行期"已登出"状态，`Translate` 直接返回空串，避免用未验证配置逐行请求 |
+| 登录自检失败 | 置运行期"已登出"状态，`Translate` 直接返回空串，避免用未验证配置逐行请求；测试按钮显示未登录提示 |
 
 超时：翻译每次请求前按剩余预算调用 `HostIncTimeOut`，单条字幕总预算默认 6 s；
 登录自检固定 20 s。单行通常 1-3 次请求，质量重试最多再加 1 次，且必须仍在预算内。

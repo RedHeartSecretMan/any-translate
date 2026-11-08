@@ -81,7 +81,7 @@ auth   := bearer | x-api-key | query | none
 - preset 形式**只按第一个 `:` 切分**：`ollama:qwen3:4b` → model=`qwen3:4b`。
 - **opts 对任意 spec 都生效**：`deepseek:deepseek-chat|debug=1`、
   `openai|max_tokens=512` 均合法。
-- **只写 preset（无 model）→ 使用预设默认模型**（`P_MODEL`，17 项见 §3.2）。
+- **只写 preset（无 model）→ 使用预设默认模型**（`P_MODEL`，18 项见 §3.2）。
 - custom 的 url 是**完整请求地址**（不再追加协议路径）；model 可省略。
 - preset 名大小写不敏感；`custom|` 前缀大小写敏感（`.as` 用 `StartsWith`）。
 - opts 容错（镜像 `.as`）：缺 `=` / key 为空 / 未知 key 的片段**静默跳过**；
@@ -96,6 +96,10 @@ auth   := bearer | x-api-key | query | none
 
 | preset | base URL | 默认模型 | kind | 默认 auth / keyname |
 | --- | --- | --- | --- | --- |
+| vllm | `http://127.0.0.1:8000/v1` | 服务端默认模型 | openai | none |
+| sglang | `http://127.0.0.1:30000/v1` | 服务端默认模型 | openai | none |
+| lmstudio | `http://127.0.0.1:1234/v1` | 服务端默认模型 | openai | none |
+| ollama | `http://127.0.0.1:11434` | 留空（用 `ollama:<model>` 指定） | ollama | none |
 | openai | `https://api.openai.com/v1` | `gpt-5.6-terra` | openai | bearer |
 | deepseek | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | openai | bearer（追加关闭思考字段） |
 | moonshot | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` | openai | bearer |
@@ -104,12 +108,9 @@ auth   := bearer | x-api-key | query | none
 | siliconflow | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V4-Flash` | openai | bearer（追加关闭思考字段） |
 | openrouter | `https://openrouter.ai/api/v1` | `openai/gpt-5.6-terra` | openai | bearer |
 | groq | `https://api.groq.com/openai/v1` | `openai/gpt-oss-120b` | openai | bearer |
-| xai | `https://api.x.ai/v1` | `grok-4.20` | openai | bearer |
+| xai | `https://api.x.ai/v1` | `grok-4.7` | openai | bearer |
 | mistral | `https://api.mistral.ai/v1` | `mistral-small-latest` | openai | bearer |
 | together | `https://api.together.ai/v1` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | openai | bearer |
-| lmstudio | `http://127.0.0.1:1234/v1` | 服务端默认模型 | openai | none |
-| vllm | `http://127.0.0.1:8000/v1` | 服务端默认模型 | openai | none |
-| ollama | `http://127.0.0.1:11434` | `qwen3:4b` | ollama | none |
 | anthropic | `https://api.anthropic.com` | `claude-sonnet-4-6` | anthropic | x-api-key / `x-api-key` |
 | gemini | `https://generativelanguage.googleapis.com` | `gemini-3.5-flash` | gemini | x-api-key / `x-goog-api-key` |
 | custom | 用户自填完整请求地址 | 服务端默认模型 | openai（默认） | bearer |
@@ -135,6 +136,7 @@ auth   := bearer | x-api-key | query | none
 - `minimal=1`：openai/custom 只保留 `{model?, messages, stream:false}`；
   ollama 只保留 `{model?, messages, stream:false}`；gemini 去掉
   `thinkingConfig`（保留 temperature）；anthropic 无 minimal 分支。
+  custom 带 `body` 模板时模板优先，`minimal` 不生效。
 - `max_tokens=` 映射：openai/custom → `max_completion_tokens`；ollama →
   `options.num_predict`；gemini → `generationConfig.maxOutputTokens`；
   anthropic → `max_tokens`。默认不发送（anthropic 回退 1024）。
@@ -145,10 +147,11 @@ auth   := bearer | x-api-key | query | none
 - `auth=x-api-key` 头名取 `keyname`（默认按 auth 类型：`x-api-key` / `key`）；
   `version` 只影响 anthropic 的 `anthropic-version`。
 - 自定义 `body` 模板占位符（与 `.as` 一致）：`{{prompt}}`、`{{text}}`、
-  `{{model}}`、`{{src}}`、`{{dst}}`，替换值为 JsonEscape 后的文本；
+  `{{model}}`、`{{src}}`、`{{dst}}`，替换值为 JsonEscape 后的文本；`{{src}}`/`{{dst}}`
+  是提示词语言显示名，不是语言码。
   ref 额外校验替换后仍是合法 JSON（`.as` 不校验，见 E-16）。
 - 请求体是 **UTF-8、单行、合法 JSON**；字符串转义规则见 §4。
-- OpenAI 兼容请求体 `model` 为空时省略该字段（lmstudio/vllm/custom）。
+- OpenAI 兼容请求体 `model` 为空时省略该字段（lmstudio/vllm/sglang/custom）。
 
 ### 3.4 响应提取（统一 `ExtractByPath` + `NodeText`）
 
@@ -201,7 +204,7 @@ gemini `candidates[0].content.parts`、ollama `message.content`、custom
 trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 去掉首行 →
 去整体包裹的成对引号（`""` `“”` `「」` `『』`）→ CRLF/CR 规范化 →
 `<br/>`/`<br />`/`<br>` 转换行 → `\n\n\n` → `\n\n` → RTL（ar/he/fa/ur，
-按 `L_LABEL`→`L_CODE`，含本地化标签）前置 U+202B → trim。
+按 `L_CODE`/`L_LABEL` 映射；菜单返回语言代码，本地化名称由 PotPlayer 提供）前置 U+202B → trim。
 
 注意：`Here is the translation:` **不在** `.as` 前缀表中，不会被去掉；
 `<BR>`（大写）不会被替换；`.as` 只把 3 连换行压成 2 连，不是无限压缩。
@@ -221,8 +224,9 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 - 模型匹配：大小写不敏感；允许 `model -> model:tag` 前缀匹配
   （如 `qwen3` 匹配 `qwen3:4b`）；不匹配时提示
   “未找到模型: X；可用示例: …”。
-- 登录前置校验：非 none 认证且非 custom 时 Key 必填；anthropic/gemini
-  必须有模型名（预设默认模型保证非空）；custom 允许无 Key。
+- 登录前置校验：非 none 认证且非 custom 时 Key 必填；anthropic/gemini/ollama
+  必须有模型名（anthropic/gemini 由预设默认模型保证非空，ollama 必须显式
+  `ollama:<model>`）；custom 允许无 Key。
 
 ## 4. JSON 转义与日志脱敏（`.as` 对齐）
 
@@ -258,7 +262,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 | --- | --- | --- | --- |
 | E-01 | together 域名 | 以 `.as`/providers.md 为准：`https://api.together.ai/v1` | ✅ resolved |
 | E-02 | Gemini Key 位置 | 以 `.as` 为准：`x-goog-api-key` 请求头，Key 不进 URL | ✅ resolved |
-| E-03 | 只写 preset 的 model | 用 `P_MODEL` 预设默认模型（17 项，DESIGN §5.1） | ✅ resolved |
+| E-03 | 只写 preset 的 model | 用 `P_MODEL` 预设默认模型（18 项，DESIGN §5.1） | ✅ resolved |
 | E-04 | Anthropic `max_tokens` | 默认 1024，可 `max_tokens=` 覆盖 | ✅ resolved |
 | E-05 | 默认 temperature | 0.2（`temp=` 可覆盖，非法字符清除后回退 0.2；`.5`→`0.5`、`1.`→`1`） | ✅ resolved |
 | E-06 | 数组/多文本块拼接 | 用 `\n` 连接非空项（Anthropic 多块=多段） | ✅ resolved |
@@ -269,7 +273,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 | E-11 | 重试策略 | `.as` 的 400/空响应/429/5xx/质量重试都受单条 `deadline` 预算约束；单请求 mock 无法断言次数，测试不覆盖。质量门判定由 `validate_translation` 单测覆盖 | ⏳ out of scope（次数） |
 | E-12 | clean_text 细节 | 前缀表/去包裹引号/换行压缩/`<br>` 均按 `.as` 对齐 | ✅ resolved |
 | E-13 | 错误呈现方式 | ref 用稳定错误码 + `Err.detail` 供断言；`.as` 返回空串 + `ErrorHint` Dbg，不向字幕混入错误文案（DESIGN §4） | 📌 interface difference |
-| E-14 | lmstudio/vllm 认证 | auth=none，无需 Key（`P_AUTH`） | ✅ resolved |
+| E-14 | lmstudio/vllm/sglang 认证 | auth=none，无需 Key（`P_AUTH`） | ✅ resolved |
 | E-15 | 默认 probe | 预设 `models`、custom `none`（DESIGN §5.2） | ✅ resolved |
 | E-16 | body 模板 JSON 校验 | `.as` 不校验；ref 额外校验并返回 `bad_body_template`（安全增强，防注入/坏请求） | 📌 ref stricter |
 | E-17 | path 下标限制 | 只支持 0-9 单数字（DESIGN 6.2）；多位数 `[10]` 在 `.as` 与 ref 中都取不到值 | ✅ aligned |
@@ -284,7 +288,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 | D-02 | 只写 preset | 用 P_MODEL 默认模型（同 E-03） | resolved |
 | D-03 | custom 省略 model | 合法（custom、竖线、url，model 可空）；默认请求体省略 model | aligned |
 | D-04 | custom 任意 scheme | `.as` 不校验 URL scheme，ref 同样接受（运行期由 HTTP 层失败） | aligned |
-| D-05 | opts 容错 | 缺 `=`/空 key/未知 key 静默跳过；重复 key 后者覆盖；值内允许 `|`（custom opts） | aligned |
+| D-05 | opts 容错 | 缺 `=`/空 key/未知 key 静默跳过；重复 key 后者覆盖；值内允许 `\|`（custom opts） | aligned |
 | D-06 | 非法 auth | 报 `bad_opts`，文案与 `.as` 一致 | aligned |
 | D-07 | temp/max_tokens 清洗 | 非数字字符删除；temp 空/多小数点→0.2，`.5`→0.5、`1.`→1；max_tokens 空→不发送 | aligned |
 | D-08 | probe 取值 | `.as` 不校验，只要不是 `none` 就自检 | aligned |
@@ -320,13 +324,13 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 按此顺序核对，可覆盖全部三层契约（`.as` 以函数名为准）：
 
 1. **常量**：`PRESETS` ↔ `P_ID/P_BASE/P_MODEL/P_PROTO/P_AUTH/P_KEYNAME/P_EXTRA`
-   （17 行逐项，`test_all_presets_resolve_to_expected_defaults` +
+   （18 行逐项，`test_all_presets_resolve_to_expected_defaults` +
    `test_all_preset_headers` + `test_all_preset_chat_urls`）；
    `DEFAULT_SPEC`、`DEFAULT_TEMPERATURE=0.2`、`DEFAULT_ANTHROPIC_MAX_TOKENS=1024`、
    `DEFAULT_ANTHROPIC_VERSION=2023-06-01`。
 2. **spec 解析**：`parse_spec` ↔ `ParseSpec`；对照 `TestSpecParsing` 全部用例：
    空 spec、preset 默认模型、第一个 `:` 切分、任意 spec 的 `|opts`、
-   10 个 opts key、容错与非法输入文案、custom 省略 model、大小写。
+   13 个 opts key、容错与非法输入文案、custom 省略 model、大小写。
 3. **URL**：`build_url` ↔ `BuildUrl` + `AppendQueryAuth`；`test_all_preset_chat_urls`、
    `test_gemini_key_never_in_url`、custom/`auth=query` 用例
    （gemini/openai/anthropic 的 `?key=`、显式 keyname、无认证头）。
@@ -375,13 +379,13 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
    语言规则、上下文块、质量门、非对白过滤）；
 6. `ProbeUrl`/`Probe`/`ServerLogin`（探测路径、404/405 放行规则、Key/模型前置
    校验、错误文案）；
-6. `ExtractByPath`/`WalkPath`/`NodeText`（默认 path、`[n]` 规则、数组分隔符、
+7. `ExtractByPath`/`WalkPath`/`NodeText`（默认 path、`[n]` 规则、数组分隔符、
    思考块 type 集合、对象取值顺序）；
-7. `CleanTranslation`/`StripKnownPrefixes`（前缀表、围栏、包裹引号、换行规则）；
-8. `JsonEscape`/`SafeUrl`/`MaskKey`/`StripChars`（C0 剔除规则、先编码后原始 Key
+8. `CleanTranslation`/`StripKnownPrefixes`（前缀表、围栏、包裹引号、换行规则）；
+9. `JsonEscape`/`SafeUrl`/`MaskKey`/`StripChars`（C0 剔除规则、先编码后原始 Key
    的脱敏顺序、MaskKey 阈值 <16）；
-9. 新增协议/预设：同步 mock 路由与 `problems` 契约校验、DESIGN §5/§6、本文件 §3；
-10. 回归命令：`pwsh -File tests/run_tests.ps1`（含独立 mock 冒烟）+
+10. 新增协议/预设：同步 mock 路由与 `problems` 契约校验、DESIGN §5/§6、本文件 §3；
+11. 回归命令：`pwsh -File tests/run_tests.ps1`（含独立 mock 冒烟）+
     `python -m unittest tests.test_static -v` + 人工按 §7 抽查。
 
 ## 9. 未覆盖范围

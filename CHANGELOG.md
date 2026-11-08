@@ -6,13 +6,15 @@
 
 ### 新增
 
-- 协议适配器：OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama 原生、自定义 JSON。
-- 16 个服务商预设 + `custom|` 自定义接口语法（body 模板、JSON 路径、鉴权方式可配）。
+- 协议适配器：OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama、自定义 JSON。
+- 17 个服务商预设 + `custom|` 自定义接口语法（body 模板、JSON 路径、鉴权方式可配）；本机预设覆盖 vLLM / SGLang / LM Studio / Ollama。
+- 本机服务（vLLM / SGLang / LM Studio / Ollama）默认不猜模型：vLLM/SGLang/LM Studio 可留空，Ollama 用 `ollama:<model>` 显式指定。
+- 标题按简体中文、繁体中文、韩文、日文、默认回退排列，`GetTitle` 包含 CP936/CP950/CP949/CP932/CP0。
 - 登录自检：按协议探测模型列表，校验 Key 与模型名，失败返回中文可操作提示。
 - 错误分类：401/402/403/404/413/422/429/5xx 分别提示。
-- 自动降级：400 且错误文本提示参数不支持时改用最小请求体；200 但译文为空时重试一次。
+- 自动降级：400 且错误文本提示参数不支持时改用最小请求体；200 但无法提取译文（空/解析失败/路径不存在）时重试一次。
 - 诊断模式：`debug=1` 打开脚本控制台，输出请求/响应摘要、跳过原因与单次耗时（Key 脱敏）。
-- 82 种语言的中文或母语名标签，目标语言映射为提示词中的语言名。
+- 82 种语言；插件返回语言代码，由 PotPlayer 本地化显示菜单；提示词映射为中文/英文双语语言名。
 - `style=movie|tv|anime|doc|tech|formal|casual` 翻译风格模板，按题材追加提示词规则；默认 `movie`。
 - `context=0..8` 可调上下文窗口；历史同时保存原文与译文，提示词给出最近 N 组对照。
 - `deadline=2000..20000` 单条字幕总预算（默认 6 s）；预算内才继续降级、429/5xx 与质量重试。

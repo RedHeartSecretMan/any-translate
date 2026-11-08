@@ -14,7 +14,7 @@
     pwsh -File tests/run_tests.ps1           # 一键运行 + 摘要
 
 覆盖范围：
-(a) 17 个 provider 预设的 URL / 请求头 / 请求体断言（含默认模型、厂商扩展字段）；
+(a) 18 个 provider 预设的 URL / 请求头 / 请求体断言（含默认模型、厂商扩展字段）；
 (b) 全部成功/异常响应样例解析（提取路径、数组 \\n 拼接、思考块跳过、围栏清洗）；
 (c) spec 解析边界（默认值、preset 默认模型、任意 spec 的 |opts、非法 spec、
     style/context/deadline 选项与默认值）；
@@ -68,14 +68,15 @@ PRESET_EXPECTED = {
                    "openai/gpt-5.6-terra", ""),
     "groq": (KIND_OPENAI, "https://api.groq.com/openai/v1", "bearer",
              "openai/gpt-oss-120b", ""),
-    "xai": (KIND_OPENAI, "https://api.x.ai/v1", "bearer", "grok-4.20", ""),
+    "xai": (KIND_OPENAI, "https://api.x.ai/v1", "bearer", "grok-4.7", ""),
     "mistral": (KIND_OPENAI, "https://api.mistral.ai/v1", "bearer",
                 "mistral-small-latest", ""),
     "together": (KIND_OPENAI, "https://api.together.ai/v1", "bearer",
                  "meta-llama/Llama-3.3-70B-Instruct-Turbo", ""),
     "lmstudio": (KIND_OPENAI, "http://127.0.0.1:1234/v1", "none", "", ""),
     "vllm": (KIND_OPENAI, "http://127.0.0.1:8000/v1", "none", "", ""),
-    "ollama": (KIND_OLLAMA, "http://127.0.0.1:11434", "none", "qwen3:4b", ""),
+    "sglang": (KIND_OPENAI, "http://127.0.0.1:30000/v1", "none", "", ""),
+    "ollama": (KIND_OLLAMA, "http://127.0.0.1:11434", "none", "", ""),
     "anthropic": (KIND_ANTHROPIC, "https://api.anthropic.com", "x-api-key",
                   "claude-sonnet-4-6", "x-api-key"),
     "gemini": (KIND_GEMINI, "https://generativelanguage.googleapis.com", "x-api-key",
@@ -98,6 +99,7 @@ EXPECTED_CHAT_URLS = {
     "together": "https://api.together.ai/v1/chat/completions",
     "lmstudio": "http://127.0.0.1:1234/v1/chat/completions",
     "vllm": "http://127.0.0.1:8000/v1/chat/completions",
+    "sglang": "http://127.0.0.1:30000/v1/chat/completions",
     "ollama": "http://127.0.0.1:11434/api/chat",
     "anthropic": "https://api.anthropic.com/v1/messages",
     "gemini": (
@@ -251,7 +253,7 @@ class TestSpecParsing(unittest.TestCase):
         self.assertEqual(spec.model, "gpt-5.6-terra")
         ok, spec = ref_impl.parse_spec("ollama:")
         self.assertTrue(ok, msg=spec)
-        self.assertEqual(spec.model, "qwen3:4b")
+        self.assertEqual(spec.model, "")
 
     def test_preset_model_splits_on_first_colon_only(self):
         ok, spec = ref_impl.parse_spec("ollama:qwen3:4b")
@@ -279,6 +281,7 @@ class TestSpecParsing(unittest.TestCase):
         self.assertIn("no-such-provider", err.message)
         self.assertIn("openai", err.message)
         self.assertIn("anthropic", err.message)
+        self.assertIn("vllm/sglang/lmstudio/ollama", err.message)
 
     def test_all_presets_resolve_to_expected_defaults(self):
         for name, (kind, base, auth, default_model, keyname) in PRESET_EXPECTED.items():
@@ -472,6 +475,7 @@ class TestSpecParsing(unittest.TestCase):
         cases = {
             "debug=1": ("debug", True),
             "debug=true": ("debug", True),
+            "debug=TRUE": ("debug", True),
             "debug=yes": ("debug", False),
             "debug=0": ("debug", False),
             "minimal=1": ("minimal", True),
@@ -612,30 +616,38 @@ class TestRequestBuilding(unittest.TestCase):
             "deepseek": "deepseek-v4-flash",
             "groq": "openai/gpt-oss-120b",
             "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-            "ollama": "qwen3:4b",
             "anthropic": "claude-sonnet-4-6",
             "gemini": "gemini-3.5-flash",
         }
         for preset, model in cases.items():
             with self.subTest(preset=preset):
                 req = request_of(preset)
-                if preset == "ollama":
-                    self.assertEqual(body_of(req)["model"], model)
-                elif preset == "anthropic":
+                if preset == "anthropic":
                     self.assertEqual(body_of(req)["model"], model)
                 elif preset == "gemini":
                     self.assertIn("models/" + model, req.url)
                 else:
                     self.assertEqual(body_of(req)["model"], model)
+        # 本机服务默认不猜模型
+        self.assertNotIn("model", body_of(request_of("ollama")))
+        self.assertNotIn("model", body_of(request_of("lmstudio")))
+        self.assertNotIn("model", body_of(request_of("vllm")))
+        self.assertNotIn("model", body_of(request_of("sglang")))
 
-    def test_lmstudio_local_no_auth_header(self):
-        req = request_of("lmstudio", key="")
-        self.assertEqual(req.url, "http://127.0.0.1:1234/v1/chat/completions")
-        self.assertEqual(req.headers, {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        })
-        self.assertNotIn("model", body_of(req))  # lmstudio 默认模型为空
+    def test_local_presets_no_auth_no_model(self):
+        for preset, url in (
+            ("vllm", "http://127.0.0.1:8000/v1/chat/completions"),
+            ("sglang", "http://127.0.0.1:30000/v1/chat/completions"),
+            ("lmstudio", "http://127.0.0.1:1234/v1/chat/completions"),
+        ):
+            with self.subTest(preset=preset):
+                req = request_of(preset, key="")
+                self.assertEqual(req.url, url)
+                self.assertEqual(req.headers, {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                })
+                self.assertNotIn("model", body_of(req))
 
     def test_ollama_native_request(self):
         req = request_of("ollama:qwen3:4b", key="ignored", prompt="hi")
@@ -1756,11 +1768,18 @@ class TestProbeAndLoginUnit(unittest.TestCase):
         self.assertEqual(ref_impl.join_models(["a", "b"]), "a, b")
         self.assertEqual(ref_impl.join_models([str(i) for i in range(10)], 3), "0, 1, 2 ...")
 
-    def test_login_without_network_needs_key(self):
+    def test_login_preflight_checks(self):
         ok, err = ref_impl.login("openai:gpt-4o-mini", "")
         self.assertFalse(ok)
         self.assertEqual(err.code, "auth_needed")
         self.assertIn("API Key", err.message)
+
+        # Ollama 的 /api/chat 必须带 model，登录前就拒绝空模型
+        ok, err = ref_impl.login("ollama", "")
+        self.assertFalse(ok)
+        self.assertEqual(err.code, "config_error")
+        self.assertIn("必须指定模型名", err.message)
+        self.assertIn("ollama:<model>", err.message)
 
     def test_login_local_none_auth_allows_empty_key(self):
         # probe=none 避免真正发请求

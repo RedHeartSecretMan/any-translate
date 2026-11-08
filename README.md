@@ -25,7 +25,7 @@
 
 any-translate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译插件：把一条外文字幕交给任意 LLM 或翻译 API，返回一条目标语言字幕。整个插件只有一个 AngelScript 文件，无需安装器，也不用改源码换服务商。
 
-内置 OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama 原生和自定义 JSON 五种协议；OpenAI、DeepSeek、Kimi、智谱、通义千问、硅基流动、OpenRouter、Groq、xAI、Mistral、Together、LM Studio、vLLM 等 16 个预设开箱即用，one-api/new-api 等网关和其他接口用一行 `custom|...` 配置接入。
+内置 OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama 和自定义 JSON 五种协议；OpenAI、DeepSeek、Kimi、智谱、通义千问、硅基流动、OpenRouter、Groq、xAI、Mistral、Together、vLLM、SGLang、LM Studio、Ollama 等 17 个预设开箱即用，one-api/new-api 等网关和其他接口用一行 `custom|...` 配置接入。
 
 ## 为什么是 any-translate
 
@@ -40,8 +40,8 @@ any-translate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译
 
 | 能力 | 说明 |
 | --- | --- |
-| 多协议 | OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama 原生、自定义 JSON |
-| 16 个预设 + custom | 换服务商/模型只改登录框里的一行配置 |
+| 多协议 | OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama、自定义 JSON |
+| 17 个预设 + custom | 换服务商/模型只改登录框里的一行配置 |
 | 上下文翻译 | 默认保留最近 4 组原文+译文作为语境，`context=0..8` 可调，提升指代、术语与语气一致性 |
 | 场景风格 | `style=movie/tv/anime/doc/tech/formal/casual`，按题材切换提示词模板 |
 | 译文质量门 | 回显原文、目标文字脚本、超长译文会被拦截并重试一次，失败宁可不显示 |
@@ -51,7 +51,7 @@ any-translate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译
 | 登录自检 | 按协议探测模型列表，校验 Key 与模型名，失败给出可操作提示 |
 | 自动降级 | 服务端拒绝 `temperature` / `max_tokens` 时改用最小请求体并记住 |
 | 诊断模式 | `debug=1` 打开脚本控制台，查看状态码、耗时与脱敏后的响应 |
-| 82 种语言 | 目标语言以中文或母语名显示，提示词映射为模型更易理解的语言名 |
+| 82 种语言 | 插件返回语言代码，菜单名称由 PotPlayer 本地化显示；提示词映射为双语语言名 |
 | 隐私默认 | 无遥测；Key 由 PotPlayer 的 `HostSaveString` 保存在本机（非加密） |
 
 ## 快速开始
@@ -66,10 +66,16 @@ PotPlayer 安装目录\Extension\Subtitle\Translate\
 
 即 `SubtitleTranslate - AnyTranslate.as` 与 `SubtitleTranslate - AnyTranslate.ico`。
 
-也可以运行安装脚本（自动检测安装路径、备份旧文件）：
+也可以运行安装脚本（自动检测安装路径、备份旧文件；安装到 `Program Files` 需要管理员权限）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```
+
+只检查目标路径、不写文件：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -DryRun
 ```
 
 卸载：
@@ -92,16 +98,30 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Uninstall
 
 | 场景 | 用户框 | 密码框 |
 | --- | --- | --- |
-| Ollama（本机） | `ollama:qwen3:4b` | 留空 |
-| LM Studio（本机） | `lmstudio` | 留空 |
-| vLLM（本机） | `vllm` | 留空 |
+| vLLM（本机） | `vllm`（默认使用已加载模型） | 留空 |
+| SGLang（本机） | `sglang`（默认使用已加载模型） | 留空 |
+| LM Studio（本机） | `lmstudio`（默认使用已加载模型） | 留空 |
+| Ollama（本机） | `ollama:qwen3:4b`（必须显式指定模型） | 留空 |
 | DeepSeek（云端） | `deepseek:deepseek-v4-flash` | `sk-...` |
 | OpenAI（云端） | `openai:gpt-5.6-terra` | `sk-...` |
 | Anthropic（云端） | `anthropic:claude-sonnet-4-6` | `sk-ant-...` |
 | Google Gemini（云端） | `gemini:gemini-3.5-flash` | AIza... |
-| 自定义接口 | `custom|https://your-gateway/v1/chat/completions|model-name` | 网关 Key |
+| 自定义接口 | `custom\|https://your-gateway/v1/chat/completions\|model-name` | 网关 Key |
 
-模型名只是示例，以服务商当前 `/models` 列表为准；填错时登录会提示可用模型。
+模型名只是示例，以服务商当前 `/models` 列表为准；填错时登录会提示可用模型。本机服务默认不猜模型：vLLM/SGLang/LM Studio 可留空使用已加载模型，Ollama 需要显式写 `ollama:<model>`（只写 `ollama` 会在登录时提示缺模型）。
+
+### 模型怎么选
+
+PotPlayer 的翻译插件登录框只有文本输入，没有“服务商/模型”下拉列表：
+
+- `preset` 或 `preset:`：使用预设的默认模型（本机预设默认留空）；
+- `preset:model`：显式覆盖为该服务商的任意模型；
+- 登录时会按 `probe=models` 拉取服务商的模型列表，但只用于校验和提示，不会自动改写配置；
+- 模型不匹配时，错误信息会列出最多 6 个可用示例，复制到冒号后重新登录即可。
+
+因此“自动发现模型、手动选择”在当前宿主 UI 里是**两段式**：先探测看提示，再把选中的模型写进配置串；插件不会静默替你选一个模型。PotPlayer 插件接口没有自定义下拉控件，无法在登录框内直接做“服务商 → 模型”的级联选择。
+
+> 翻译设置里的“测试”按钮在 AnyTranslate **未登录、目标语言未选或请求失败**时会显示具体提示；提示使用 ASCII 英文，避免 PotPlayer 把测试返回值按 ANSI 解码成乱码。正常播放路径仍然静默返回空串，不会把错误写进字幕。Google 等内置引擎无需登录，所以测试会直接出结果。
 
 想按题材调整译文语气，在配置后追加 `|style=anime`、`|style=tech` 等；上下文默认 4 组，可用 `|context=6` 调整。
 
@@ -130,15 +150,15 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 
 | 选项 | 含义 | 默认 |
 | --- | --- | --- |
-| `path` | 响应里的译文 JSON 路径，支持 `a.b[0].c`（下标仅 0-9） | `choices[0].message.content` |
+| `path` | 响应里的译文 JSON 路径，支持 `a.b[0].c`（下标仅 0-9） | 按协议默认 |
 | `auth` | `bearer` / `x-api-key` / `query` / `none` | `bearer` |
-| `keyname` | 鉴权头名，或 query 参数名 | `Authorization` |
-| `body` | 请求体模板，占位符 `{{prompt}}` `{{text}}` `{{model}}` `{{src}}` `{{dst}}` | OpenAI 兼容体 |
+| `keyname` | 鉴权头名，或 query 参数名 | 按 auth 类型取默认值 |
+| `body` | 请求体模板，占位符 `{{prompt}}` `{{text}}` `{{model}}` `{{src}}` `{{dst}}`（后两者是语言显示名，不是语言码） | OpenAI 兼容体 |
 | `temp` | 采样温度 | `0.2` |
-| `max_tokens` | 输出上限（默认不发送） | 不发送 |
-| `minimal` | `1` = 强制最小请求体 | `0` |
+| `max_tokens` | 输出上限（默认不发送；Anthropic 必填，默认 1024） | 不发送 |
+| `minimal` | `1` = 强制最小请求体（custom 带 body 模板时仍优先模板） | `0` |
 | `version` | Anthropic `anthropic-version` 头 | `2023-06-01` |
-| `probe` | 登录自检 `models` / `none` | `none` |
+| `probe` | 登录自检 `models` / `none` | 预设 `models`，custom `none` |
 | `debug` | `1` = 打开诊断控制台 | `0` |
 | `style` | 翻译风格：`movie` / `tv` / `anime` / `doc` / `tech` / `formal` / `casual` | `movie` |
 | `context` | 最近原文+译文组数，`0..8` | `4` |
@@ -172,10 +192,10 @@ deepseek:deepseek-v4-flash|style=anime;context=6;deadline=5000
 
 ### 自定义接口例子
 
-LibreTranslate（自建）：
+LibreTranslate（自建；占位符是语言显示名，不是语言码，下面示例固定英译中，其他语言请改 body 里的 `source`/`target`）：
 
 ```text
-custom|http://127.0.0.1:5000/translate|any|body={"q":"{{text}}","source":"{{src}}","target":"{{dst}}","format":"text"};path=translatedText;auth=none
+custom|http://127.0.0.1:5000/translate|any|body={"q":"{{text}}","source":"en","target":"zh","format":"text"};path=translatedText;auth=none
 ```
 
 Azure OpenAI（Key 头名是 `api-key`，部署名在 URL 里）：
@@ -194,6 +214,10 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 
 | preset | 协议 | 默认模型 | 备注 |
 | --- | --- | --- | --- |
+| `vllm` | OpenAI 兼容 | 服务端默认模型 | 无鉴权，可留空 |
+| `sglang` | OpenAI 兼容 | 服务端默认模型 | 无鉴权，可留空 |
+| `lmstudio` | OpenAI 兼容 | 服务端默认模型 | 无鉴权，可留空 |
+| `ollama` | Ollama | 留空（需显式指定） | 无鉴权，`think:false` |
 | `openai` | OpenAI 兼容 | `gpt-5.6-terra` | 推理模型自动降级 |
 | `deepseek` | OpenAI 兼容 | `deepseek-v4-flash` | 自动关闭思考模式 |
 | `moonshot` | OpenAI 兼容 | `kimi-k3.1-pro` | |
@@ -202,12 +226,9 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 | `siliconflow` | OpenAI 兼容 | `deepseek-ai/DeepSeek-V4-Flash` | 自动关闭思考 |
 | `openrouter` | OpenAI 兼容 | `openai/gpt-5.6-terra` | |
 | `groq` | OpenAI 兼容 | `openai/gpt-oss-120b` | |
-| `xai` | OpenAI 兼容 | `grok-4.20` | |
+| `xai` | OpenAI 兼容 | `grok-4.7` | |
 | `mistral` | OpenAI 兼容 | `mistral-small-latest` | |
 | `together` | OpenAI 兼容 | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | |
-| `lmstudio` | OpenAI 兼容 | 服务端默认模型 | 无鉴权 |
-| `vllm` | OpenAI 兼容 | 服务端默认模型 | 无鉴权 |
-| `ollama` | Ollama 原生 | `qwen3:4b` | 无鉴权，`think:false` |
 | `anthropic` | Anthropic | `claude-sonnet-4-6` | `x-api-key` |
 | `gemini` | Gemini | `gemini-3.5-flash` | Key 走 `x-goog-api-key` 头 |
 | `custom` | 默认 OpenAI 兼容 | 用户自填 | 完整请求地址 |
@@ -222,12 +243,13 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 | 登录提示 404/405 | 一般不会出现：预设服务没有 `/models` 时插件会跳过模型校验。若出现，按提示检查地址。 |
 | 登录提示 429 | 限流，稍后再试。 |
 | 登录提示"未找到模型" | 按提示列表里的可用模型改 `preset:model`。 |
-| 个别字幕没有译文 | 运行期失败是静默的。重新登录看自检结果；或加 `debug=1`（如 `deepseek:deepseek-v4-flash|debug=1`）后看控制台状态码与耗时。 |
+| 个别字幕没有译文 | 运行期失败是静默的。重新登录看自检结果；或加 `debug=1`（如 `deepseek:deepseek-v4-flash\|debug=1`）后看控制台状态码与耗时。 |
 | 登录失败后突然都不翻译了 | 登录自检失败会置"已登出"状态，避免用错误配置逐行请求；重新登录成功即恢复。 |
 | `debug=1` 显示 `skip translate` | 目标语言为空/Auto、已登出，或 base URL 为空。先选明确目标语言并重新登录。 |
 | 400 但登录正常 | 模型不接受 `temperature`/`max_tokens`；插件会自动降级，若仍失败请确认模型名。 |
 | 延迟很高 | 云端推理模型会先思考；换用非推理模型，或确认预设已关闭思考。本机模型首次加载也要时间；可把 `deadline` 调高或先预热。 |
 | 译文串味或不连贯 | 默认上下文 4 组；可调 `context=0..8`，暂停超过 2 分钟会自动清空。 |
+| 升级后列表目标语言仍是旧名称 | PotPlayer 会缓存插件上次的目标语言名称；在设置里重新选择一次目标语言，或重启 PotPlayer。 |
 | 译文过长/回显原文/答错语言 | 插件会拦截并重试一次；仍不合格会留空，`debug=1` 可看到 `validation failed` 原因。 |
 
 调试示例：`deepseek:deepseek-v4-flash|debug=1`。高级选项（`path`、`body`、`minimal`、`temp` 等）可以加在任意 spec 的 `|` 之后；`custom|...|...|opts` 也支持同样的 opts 语法。
@@ -276,7 +298,7 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 
 ## 开发与验证
 
-AngelScript 无法在本机直接执行，本项目按三层验证（本地检查需要 Python 3.10 或更高；CI 使用 3.12）：
+AngelScript 无法在本机直接执行，本项目按三层可复跑验证（另有内部独立审查；本机检查需要 Python 3.10 或更高；CI 使用 3.12）：
 
 ```powershell
 # 1. 静态检查：括号配平、入口点、语言表/预设表长度、Host API 是否真实存在
