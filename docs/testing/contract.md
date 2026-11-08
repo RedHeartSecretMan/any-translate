@@ -72,7 +72,7 @@ Python 解释器使用 PATH 中的 `python`（3.10+，契约测试只用标准�
 spec   := preset [":" model] ["|" opts]
         | "custom" "|" url ["|" model ["|" opts]]
 opts   := kv (";" kv)*        kv := key "=" value
-keys   := path | auth | keyname | body | temp | max_tokens | probe | debug | version | minimal | style | context | contextmode | contextchars | glossary | deadline | dst | think
+keys   := path | auth | keyname | body | headers | temp | max_tokens | probe | probe_timeout | debug | version | minimal | style | contextitems | contextmode | contextchars | glossary | deadline | dst | think
 auth   := bearer | x-api-key | query | none
 ```
 
@@ -84,10 +84,10 @@ auth   := bearer | x-api-key | query | none
 - **只写 preset（无 model）→ 使用预设默认模型**（`P_MODEL`，18 项见 §3.2）。
 - custom 的 url 是**完整请求地址**（不再追加协议路径）；model 可省略。
 - preset 名大小写不敏感；`custom|` 前缀大小写敏感（`.as` 用 `StartsWith`）。
-- opts 容错（镜像 `.as`）：缺 `=` / key 为空 / 未知 key 的片段**静默跳过**；
+- opts 容错：缺 `=` / key 为空 / 未知 key 会在登录时报错（`bad_opts`）；
   `temp` 删除非 `[0-9.]` 字符后为空则回退 0.2，`.5`→`0.5`、`1.`→`1`；
   `max_tokens` 只保留数字，为空则不发送；`debug` / `minimal` 仅 `1` 或 `true` 为真；
-  `version` 原样透传；`context` 只取数字并夹到 0..8；`style` 默认 `movie`；
+  `version` 原样透传；`contextitems` 只取数字并夹到 0..32；`style` 默认 `movie`；
   `deadline` 只取数字并夹到 2000..20000，默认 6000。
 - 非法值报错（与 `.as` 文案一致）：未知服务商、custom 缺 URL、auth 取值非法、
   style 不在 `movie/tv/anime/doc/tech/formal/casual` 内。
@@ -288,7 +288,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 | D-02 | 只写 preset | 用 P_MODEL 默认模型（同 E-03） | resolved |
 | D-03 | custom 省略 model | 合法（custom、竖线、url，model 可空）；默认请求体省略 model | aligned |
 | D-04 | custom 任意 scheme | `.as` 不校验 URL scheme，ref 同样接受（运行期由 HTTP 层失败） | aligned |
-| D-05 | opts 容错 | 缺 `=`/空 key/未知 key 静默跳过；重复 key 后者覆盖；值内允许 `\|`（custom opts） | aligned |
+| D-05 | opts 容错 | 缺 `=`/空 key/未知 key 报 `bad_opts`；重复 key 后者覆盖；值内允许 `\|`（custom opts） | aligned |
 | D-06 | 非法 auth | 报 `bad_opts`，文案与 `.as` 一致 | aligned |
 | D-07 | temp/max_tokens 清洗 | 非数字字符删除；temp 空/多小数点→0.2，`.5`→0.5、`1.`→1；max_tokens 空→不发送 | aligned |
 | D-08 | probe 取值 | `.as` 不校验，只要不是 `none` 就自检 | aligned |
@@ -315,7 +315,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 | D-29 | MaskKey 阈值 | 长度 <16 → `****`；≥16 才显示前4/后4 | aligned |
 | D-30 | JsonEscape C0 | 剔除 C0（`\t\n\r` 除外），`\b`/`\f` 也剔除而非转义；`StripChars` 上限 1024 | aligned |
 | D-31 | 404 文案 | `ErrorHint` 404 = “接口地址或模型不存在”；ref 稳定文案含同一短语 | aligned |
-| D-32 | style/context/deadline | `style` 默认 `movie`，非法值报 `bad_opts`；`context` 默认 4、夹到 0..8；`deadline` 默认 6000、夹到 2000..20000；三者都参与运行时行为，不改变 HTTP 协议 | aligned |
+| D-32 | style/contextitems/deadline | `style` 默认 `movie`，非法值报 `bad_opts`；`contextitems` 默认 16、夹到 0..32；`deadline` 默认 6000、夹到 2000..20000；三者都参与运行时行为，不改变 HTTP 协议 | aligned |
 | D-33 | 译文质量门 | `validate_translation` 返回 `empty` / `echo` / `wrong_script` / `too_long`；`validation_reason_zh` 提供重试提示中文原因；拉丁短名/缩写放行 | ref abstraction |
 | D-34 | 非对白过滤 | 纯符号/数字/音乐符号行由 `is_non_dialogue_text` 判定，本地原样返回，不请求 API | ref abstraction |
 
@@ -330,7 +330,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
    `DEFAULT_ANTHROPIC_VERSION=2023-06-01`。
 2. **spec 解析**：`parse_spec` ↔ `ParseSpec`；对照 `TestSpecParsing` 全部用例：
    空 spec、preset 默认模型、第一个 `:` 切分、任意 spec 的 `|opts`、
-   18 个 opts key、容错与非法输入文案、custom 省略 model、大小写。
+   20 个 opts key、容错与非法输入文案、custom 省略 model、大小写。
 3. **URL**：`build_url` ↔ `BuildUrl` + `AppendQueryAuth`；`test_all_preset_chat_urls`、
    `test_gemini_key_never_in_url`、custom/`auth=query` 用例
    （gemini/openai/anthropic 的 `?key=`、显式 keyname、无认证头）。
@@ -372,7 +372,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 
 1. 预设表 7 列（`P_ID/P_BASE/P_MODEL/P_PROTO/P_AUTH/P_KEYNAME/P_EXTRA`）任一项；
 2. 默认常量：`DEFAULT_SPEC`、默认 temperature、anthropic `max_tokens`/`version`；
-3. `ParseSpec` 语法或 opts key 集合/容错规则/错误文案（含 `style`/`context`/`deadline`）；
+3. `ParseSpec` 语法或 opts key 集合/容错规则/错误文案（含 `style`/`contextitems`/`deadline`）；
 4. `BuildUrl`/`BuildHeaders`/`BuildBody` 任一分支（URL 后缀、认证头、minimal、
    max_tokens 映射、厂商扩展字段、body 模板占位符）；
 5. `BuildPrompt`/`ValidateTranslation`/`TargetRules`/`IsNonDialogueText`（风格模板、
@@ -403,8 +403,10 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 
 ---
 
-最后更新：2026-11-07（0.1.0：style/context/deadline、目标语言规则、译文质量门、
+最后更新：2026-11-07（0.1.0：style/contextitems/deadline、目标语言规则、译文质量门、
 非对白过滤；同时回归 SafeUrl 编码脱敏 / auth=query 归一化 / MaskKey <16 /
-ErrorHint 404 / JsonEscape 剔除 C0；216 用例全部通过，`run_tests.ps1` 一键 PASS）。
+ErrorHint 404 / JsonEscape 剔除 C0；224 用例全部通过，`run_tests.ps1` 一键 PASS）。
+
+
 
 

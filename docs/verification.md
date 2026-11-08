@@ -33,12 +33,12 @@ python -m unittest tests.test_static -v
 ```text
 pwsh -NoProfile -File tests/run_tests.ps1
 → py_compile OK；独立 mock 冒烟 OK（problems=0）
-→ Ran 216 tests in 1.8s / OK
+→ Ran 224 tests in 1.8s / OK
 → 通过率 100%，mock 冒烟通过，结果 PASS
 ```
 
 覆盖 215 项契约用例 + 1 项静态检查：18 个 spec 形式（17 预设 + custom）、四种协议 URL/头/体、
-`style`/`context`/`deadline` 选项、目标语言排版规则、非对白过滤、
+`style`/`contextitems`/`deadline` 选项、目标语言排版规则、非对白过滤、
 提示词模板与译文质量门（回显/脚本/超长）、
 登录自检（`/models`、`/api/tags`、`/v1/models`、`/v1beta/models`）、
 JSON 路径与 thinking 过滤、错误码映射、JSON 转义与 C0 控制字符、
@@ -99,7 +99,7 @@ E2E 真实 HTTP（mock）。契约细节与边界决策见 `docs/testing/contrac
 | `docs/testing/contract.md` | 契约测试说明与边界决策 |
 | `docs/testing/angelscript-validation.md` | AngelScript 校验工具链调研 |
 | `docs/providers.md` | 各服务 HTTP 契约 |
-| `tests/` | mock 服务 + Python 参考实现 + 216 用例（215 契约 + 1 静态） |
+| `tests/` | mock 服务 + Python 参考实现 + 224 用例（221 契约 + 3 静态） |
 | `tests/test_static.py` | 静态检查（unittest 发现，含风格表等长） |
 
 ## 5. 复跑命令

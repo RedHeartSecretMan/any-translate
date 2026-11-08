@@ -75,27 +75,29 @@ OPTS_KEYS = (
     "temp",
     "max_tokens",
     "probe",
+    "probe_timeout",
     "debug",
     "version",
     "minimal",
     "style",
-    "context",
+    "contextitems",
     "deadline",
     "dst",
     "think",
     "contextmode",
     "contextchars",
     "glossary",
+    "headers",
 )
 
 DEFAULT_STYLE = "movie"
-DEFAULT_CONTEXT = 4
-MAX_CONTEXT = 8
+DEFAULT_CONTEXT = 16
+MAX_CONTEXT = 32
 DEFAULT_DEADLINE = 6000
 MIN_DEADLINE = 2000
 MAX_DEADLINE = 20000
-DEFAULT_CONTEXT_CHARS = 1600
-MAX_CONTEXT_CHARS = 8000
+DEFAULT_CONTEXT_CHARS = 2000
+MAX_CONTEXT_CHARS = 4000
 MAX_GLOSSARY = 32
 CONTEXT_MODES = ("block", "split", "turns")
 STYLE_ORDER = ("movie", "tv", "anime", "doc", "tech", "formal", "casual")
@@ -240,6 +242,7 @@ class Spec:
     minimal: bool = False
     debug: bool = False
     probe: str = "none"
+    probe_timeout: int = 10000
     style: str = DEFAULT_STYLE
     context: int = DEFAULT_CONTEXT
     deadline: int = DEFAULT_DEADLINE
@@ -248,6 +251,7 @@ class Spec:
     context_mode: str = "split"
     context_chars: int = DEFAULT_CONTEXT_CHARS
     glossary: Tuple[Tuple[str, str], ...] = ()
+    headers: str = ""
     extra_body: Dict[str, Any] = field(default_factory=dict)
     raw: str = ""
 
@@ -326,7 +330,7 @@ def _sanitize_temperature(value: Any) -> float:
 
 
 def _parse_context(value: Any) -> int:
-    """镜像 .as ParseContextLimit：只取数字，默认 4，范围 0..8。"""
+    """镜像 .as ParseContextLimit：只取数字，默认 16，范围 0..32。"""
     raw = "" if value is None else str(value)
     digits = re.sub(r"[^0-9]", "", raw)
     if not digits:
@@ -335,6 +339,17 @@ def _parse_context(value: Any) -> int:
         return max(0, min(MAX_CONTEXT, int(digits)))
     except ValueError:  # pragma: no cover
         return DEFAULT_CONTEXT
+
+
+def _parse_bounded_int(value: Any, fallback: int, minimum: int, maximum: int) -> int:
+    raw = "" if value is None else str(value)
+    digits = re.sub(r"[^0-9]", "", raw)
+    if not digits:
+        return fallback
+    try:
+        return max(minimum, min(maximum, int(digits)))
+    except ValueError:  # pragma: no cover
+        return fallback
 
 
 def _parse_deadline(value: Any) -> int:
@@ -527,8 +542,7 @@ def default_path_for(kind: str) -> str:
 def parse_opts(text: Any) -> Tuple[bool, Any]:
     """解析 ``key=value;key=value``。
 
-    镜像 .as：格式不合法（无 ``=`` 或 key 为空）的片段**静默跳过**，
-    未知 key 也静默忽略（向前兼容）。返回值恒为 ``(True, dict)``。
+    镜像 .as：格式不合法（无 ``=`` 或 key 为空）或未知 key 返回 bad_opts。
     """
     try:
         opts: Dict[str, str] = {}
@@ -538,12 +552,13 @@ def parse_opts(text: Any) -> Tuple[bool, Any]:
             if not segment:
                 continue
             idx = segment.find("=")
-            if idx <= 0:  # .as: eq <= 0 -> continue
-                continue
+            if idx <= 0:
+                return False, _err("bad_opts", f"opts 格式错误: {segment}")
             key = segment[:idx].strip()
             value = segment[idx + 1:].strip()
-            if key in OPTS_KEYS:
-                opts[key] = value
+            if key not in OPTS_KEYS:
+                return False, _err("bad_opts", f"未知选项: {key}")
+            opts[key] = value
         return True, opts
     except Exception as exc:  # pragma: no cover
         return False, _err("internal_error", f"解析配置选项时发生内部错误：{exc!r}")
@@ -654,6 +669,7 @@ def _finish_spec(
     if "probe" in opts:
         # .as 不校验 probe 取值：只要不是 none 就会执行自检
         probe = opts["probe"].strip().lower()
+    probe_timeout = _parse_bounded_int(opts.get("probe_timeout"), 10000, 1000, 60000)
 
     temperature = _sanitize_temperature(opts.get("temp"))
     max_tokens = _sanitize_max_tokens(opts.get("max_tokens"))
@@ -665,7 +681,7 @@ def _finish_spec(
             "bad_opts",
             "style 只能是 " + "/".join(STYLE_ORDER),
         )
-    context = _parse_context(opts.get("context"))
+    context = _parse_context(opts.get("contextitems"))
     deadline = _parse_deadline(opts.get("deadline"))
     dst_override = (opts.get("dst") or "").strip()
     think_raw = (opts.get("think") or "").strip().lower()
@@ -675,6 +691,8 @@ def _finish_spec(
         return False, _err("bad_opts", "contextmode 只能是 block / split / turns")
     context_chars = _parse_context_chars(opts.get("contextchars"))
     glossary = _parse_glossary(opts.get("glossary"))
+    headers = (opts.get("headers") or "").strip()
+    debug_raw = (opts.get("debug") or "").strip().lower()
     extra_body: Dict[str, Any] = {} if (is_custom or provider == "custom") else dict(preset.extra_body)
 
     return True, Spec(
@@ -691,8 +709,9 @@ def _finish_spec(
         max_tokens=max_tokens,
         version=version,
         minimal=_flag(opts.get("minimal")),
-        debug=_flag(opts.get("debug")),
+        debug=(_flag(opts.get("debug")) or debug_raw == "2"),
         probe=probe,
+        probe_timeout=probe_timeout,
         style=style,
         context=context,
         deadline=deadline,
@@ -701,6 +720,7 @@ def _finish_spec(
         context_mode=context_mode,
         context_chars=context_chars,
         glossary=glossary,
+        headers=headers,
         extra_body=extra_body,
         raw=raw,
     )
@@ -2046,3 +2066,4 @@ __all__ = [
     "validation_reason_zh",
     "walk_path",
 ]
+

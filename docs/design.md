@@ -112,8 +112,8 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 - 任意 spec 都可以在结尾用 `|` 追加 opts（预设与 custom 都支持）；
 - `custom` 的 `endpoint_url` 是**完整请求地址**（不再追加协议路径），`model`
   可留空（服务端默认模型）；
-- `opts` 以 `;` 分隔、`=` 赋值：`path`、`auth`、`keyname`、`body`、`temp`、
-  `max_tokens`、`minimal`、`version`、`probe`、`debug`、`style`、`context`、
+- `opts` 以 `;` 分隔、`=` 赋值：`path`、`auth`、`keyname`、`body`、`headers`、`temp`、
+  `max_tokens`、`minimal`、`version`、`probe`、`probe_timeout`、`debug`、`style`、`contextitems`、
   `contextmode`、`contextchars`、`glossary`、`deadline`、`dst`、`think`；
 - `auth=query` 时 Key 拼进 URL（参数名 `keyname`，默认 `key`；Gemini 的 query
   参数名是 `key`）。能走请求头就别用 query，Key 会出现在代理/网关日志里；
@@ -157,16 +157,18 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 | `auth` | `bearer` / `x-api-key` / `query` / `none` | `bearer` |
 | `keyname` | 鉴权头名或 query 参数名 | `Authorization` / `x-api-key` / `key` |
 | `body` | 请求体模板，占位符 `{{prompt}}` `{{text}}` `{{model}}` `{{src}}` `{{dst}}`（后两者是语言显示名，不是语言码） | OpenAI 兼容体 |
+| `headers` | custom 额外请求头，`Header:Value\|Header2:Value2` | 空 |
 | `temp` | 采样温度 | `0.2` |
 | `max_tokens` | 输出上限（默认不发送；Anthropic 必填，默认 1024） | 不发送 |
 | `minimal` | `1` = 强制最小请求体（只带 model/messages/stream；custom 带 body 模板时仍优先模板） | `0` |
 | `version` | Anthropic `anthropic-version` 头 | `2023-06-01` |
-| `probe` | 登录自检：`models` 或 `none` | `custom` 默认 `none`，其余 `models` |
-| `debug` | `1` 打开控制台诊断日志（Key 脱敏） | `0` |
+| `probe` | 登录自检：`models` 或 `none`；custom 显式 `models` 时从 endpoint 派生 `/models` | `custom` 默认 `none`，其余 `models` |
+| `probe_timeout` | 登录自检超时毫秒，`1000..60000` | `10000` |
+| `debug` | `1` 诊断摘要；`2` 额外输出请求/响应内容（敏感） | `0` |
 | `style` | 翻译风格模板（见 §5.3） | `movie` |
-| `context` | 送给模型的最近原文+译文组数，`0..8` | `4` |
+| `contextitems` | 送给模型的最近原文+译文组数，`0..32` | `16` |
 | `contextmode` | `block` / `split` / `turns`；`custom` body 模板回退 block | `split` |
-| `contextchars` | 历史上下文预算（UTF-8 字节），`0..8000`，`0` 不限 | `1600` |
+| `contextchars` | 历史上下文预算（UTF-8 字节），`0..4000`，`0` 不限 | `2000` |
 | `glossary` | 术语表：内联 `原文=译名,...`，或 `@路径` / `file:路径` 本地词表；最多 32 条 | 空 |
 | `deadline` | 单条字幕总预算（毫秒），`2000..20000` | `6000` |
 | `dst` | 强制目标语言代码（如 `ko`、`zh-CN`），绕过宿主目标语言缓存 | 跟随界面选择 |
@@ -178,7 +180,7 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 deepseek:deepseek-v4-flash
 openai:gpt-5.6-terra|temp=0.1
 gemini:gemini-3.5-flash
-deepseek:deepseek-v4-flash|style=anime;context=6;deadline=5000
+deepseek:deepseek-v4-flash|style=anime;contextitems=8;deadline=5000
 custom|http://127.0.0.1:18080/v1/chat/completions|index2b|auth=none;dst=ko;debug=1
 custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;auth=x-api-key;keyname=X-Key
 ```
@@ -189,9 +191,9 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 与中文名一一对应（`movie`/`tv`/`anime`/`doc`/`tech`/`formal`/`casual`），
 默认 `movie`。模板内容必须让模型"感觉像同一部片子的字幕"，而不是解释剧情。
 
-`context` 控制 `g_history_src` / `g_history_dst` 的窗口：成功翻译后成对入栈，
+`contextitems` 控制 `g_history_src` / `g_history_dst` 的窗口：成功翻译后成对入栈，
 prompt 同时给出最近 N 组原文与译文；`0` 关闭。窗口上限 8，调小只影响下一次
-prompt，调大不会复活已丢弃的历史。`style`/`context` 或 provider/model/dst
+prompt，调大不会复活已丢弃的历史。`style`/`contextitems` 或 provider/model/dst
 变化会清空上下文与缓存，避免跨风格污染。
 
 `deadline` 是单条字幕总预算：首次请求与后续降级/质量重试共享这一预算，
@@ -269,7 +271,7 @@ JSON 字符串一律经 `JsonEscape`：先剔除 JSON 不允许的 C0 控制字�
 | HTTP 句柄为 0 | 返回空串，`debug=1` 时打印"网络不可达" |
 | 401 / 402 / 403 | 登录期返回对应中文提示；运行期静默 |
 | 404 / 405（登录自检） | 视为该服务未实现模型列表，跳过校验并放行登录 |
-| 429 / 5xx | 预算内重试 1 次（`HostSleep(400)`），仍失败则静默 |
+| 429 / 5xx | 预算内重试 1 次，优先使用 `Retry-After`，否则 400/600ms 退避；仍失败则静默 |
 | 400 且错误文本提示参数不支持 | 预算内用最小体（仅 model + messages + stream:false）重试 1 次；成功后本次会话固定用最小体。错误文本为空或不含参数关键词时不降级 |
 | 200 但译文为空 | 预算内用最小体重试 1 次（常见于思考内容占满预算）；若最小体与当前体相同则跳过 |
 | 译文回显原文 / 目标文字脚本缺失 / 严重超长 | 预算内用更强硬提示词重试 1 次；仍不合格则本次返回空串，不写缓存 |
@@ -284,7 +286,7 @@ Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预
 
 ## 8. 性能与成本
 
-- **上下文窗口**：保留最近 4 组原文+译文（`context=0..8`），作为"仅供参考、禁止翻译"的语境块；
+- **上下文窗口**：保留最近 16 组原文+译文（`contextitems=0..32`），按 UTF-8 字节预算截断，作为"仅供参考、禁止翻译"的语境块；
 - **缓存**：最近 64 条（原文 → 译文）线性缓存，命中直接返回，避免重复计费；
 - **暂停重置**：距上次翻译超过 120 秒清空上下文与缓存；
 - **实时预算**：单条字幕默认 6 s（`deadline=2000..20000`），预算内才继续重试；
@@ -299,7 +301,7 @@ Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预
 1. **静态检查**（`tests/test_static.py`）：括号/花括号配平、14 个入口点齐全、
    三张语言表长度一致且无重复、`STYLE_IDS`/`STYLE_RULES` 等长、所有 `Host*` 调用都在二进制签名表内；
 2. **契约测试**（`tests/`，Python 参考实现 + mock 服务）：校验 spec 解析、
-   `style`/`context`/`deadline`、非对白过滤、四种协议的 URL/头/体构造、
+   `style`/`contextitems`/`deadline`、非对白过滤、四种协议的 URL/头/体构造、
    响应路径解析、目标语言规则与质量门；说明见 `docs/testing/contract.md`；
 3. **独立审查**（内部记录，未随包发布）：逐 API 对照二进制签名与官方在用插件，
    覆盖语法、逻辑、安全、兼容性、行为回归；
@@ -340,6 +342,9 @@ Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预
 
 服务商显示名、场景标签（如 `Ollama（本机）`）、术语（API Key、配置串、请求地址）、
 标点与中英空格规则统一写在 `docs/style.md`，由 review 对照。
+
+
+
 
 
 

@@ -20,10 +20,14 @@
 - 目标为简体中文且原文可判断为中文时，直接做繁简转换，避免模型保留繁体字或改写语义。
 - 新增上下文泄漏检测：模型把“- 原文/译文”历史块复述进字幕时，重试一次并改用无上下文的提示词。
 - 新增 `think=0/1` 选项，可按 DeepSeek/Moonshot/Zhipu、Qwen/SiliconFlow、OpenRouter、vLLM/SGLang/LM Studio/custom、OpenAI 系、Ollama、Gemini 的对应字段关闭/开启 thinking；显式设置会覆盖预设自带字段。
-- 新增上下文感知流水线：`contextmode=block|split|turns`、历史字符预算 `contextchars`、术语表 `glossary`；默认 `split`，历史放入 `【背景信息】`、当前句放入 `【待翻译文本】`，提示词结构参考 Index-Translate / Hy-MT2 官方模板。
+- 新增上下文感知流水线：`contextmode=block|split|turns`、历史预算 `contextchars`（默认 2000 字节）、术语表 `glossary`；历史组数 `contextitems`（0..32，默认 16）；默认 `split`，历史放入 `【背景信息】`、当前句放入 `【待翻译文本】`，提示词结构参考 Index-Translate / Hy-MT2 官方模板。
 - `glossary` 支持 `@路径` / `file:路径` 读取本地 UTF-8 词表，按行解析 `=`、`=>`、`->`、`→`、`|`、Tab 分隔，`#` 为注释。
 - `style=movie|tv|anime|doc|tech|formal|casual` 翻译风格模板，按题材追加提示词规则；默认 `movie`。
-- `context=0..8` 可调上下文窗口；历史同时保存原文与译文，提示词给出最近 N 组对照。
+- `contextitems=0..32` 可调上下文窗口；历史同时保存原文与译文，提示词给出最近 N 组对照；`contextchars` 默认 2000 字节、上限 4000。
+- 缓存按模型/目标/风格/上下文模式与历史指纹区分，加入 LRU/TTL；切换播放文件自动清理上下文。
+- 未知 opts、缺 `=` 或空 key 登录时报错。
+- 429/5xx 重试支持 `Retry-After`。
+- `custom` 显式设置 `probe=models` 时，会从 OpenAI 兼容 endpoint 派生 `/models`，登录时校验并列出可用模型；默认仍为 `none`；新增 `probe_timeout` 和 `headers`，`debug=2` 才输出请求/响应正文。
 - `deadline=2000..20000` 单条字幕总预算（默认 6 s）；预算内才继续降级、429/5xx 与质量重试。
 - 非对白过滤：纯符号、纯数字、音乐符号行本地原样返回，不调用 API。
 - 提示词改成"保留语义换行、按目标语言自然重排"，并按目标语言追加标点/书写规则与结尾"只输出译文"约束。
@@ -57,3 +61,5 @@
 - 模型名会随服务商更新，登录自检会列出可用模型，按提示改 `preset:model` 即可。
 - 质量门是本地启发式；目标语言为拉丁字母时无法可靠识别"答成另一种拉丁语言"。
 - 不做自动术语提取/整片术语表；风格只通过 `style` 显式选择，不做自动题材识别。
+
+

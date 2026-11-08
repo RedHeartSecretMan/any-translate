@@ -149,6 +149,7 @@ too_long
 新增：
 
 ```text
+contextitems=0..32
 contextmode=block|split|turns
 glossary=Name=译名,Name2=译名2
 ```
@@ -157,7 +158,7 @@ glossary=Name=译名,Name2=译名2
 - `split`：固定规则进 system，上下文和当前句留在 user；
 - `turns`：固定规则进 system，历史作为独立轮次，当前句最后一条 user；
 - `glossary`：可选，限制条目数和总长度，值内不允许 `;`/`|`；
-- 现有 `context=0..8` 继续控制历史组数。
+- 现有 `contextitems=0..32` 控制历史组数。
 
 兼容策略：
 
@@ -172,7 +173,7 @@ glossary=Name=译名,Name2=译名2
 
 ### Phase 0：基线
 
-- 保存当前 532 条唯一字幕、223 项测试的结果；
+- 保存当前 532 条唯一字幕、224 项测试的结果；
 - 记录历史泄漏率、目标字形错误、延迟、token；
 - 不改变输出。
 
@@ -228,7 +229,7 @@ glossary=Name=译名,Name2=译名2
 
 ### 单元/契约
 
-- 现有 223 项测试；
+- 现有 224 项测试；
 - 新增每个协议的 `block/split/turns` 请求体断言；
 - system 内容不包含当前字幕；
 - custom body 模板不受影响；
@@ -282,6 +283,7 @@ ipx-485.srt                                   # 日文 → 简中
 4. 数据证明 split 更好后，再讨论是否让 `turns` 成为默认。
 
 不建议直接进入多 agent/多轮 critic 架构。翻译任务的目标明确，确定性上下文管理和结构化消息的收益，通常高于增加 LLM 轮次。
+
 
 
 

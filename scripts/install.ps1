@@ -71,6 +71,12 @@ function Find-PotPlayerDir {
     throw "未找到 PotPlayer 安装目录，请用 -PotPlayerDir 指定。"
 }
 
+$sourceHash = (Get-FileHash $pluginFile -Algorithm SHA256).Hash
+$versionMatch = [regex]::Match((Get-Content $pluginFile -Raw), 'string\s+GetVersion\(\)\s*\{\s*return\s+"([^"]+)"')
+$pluginVersion = if ($versionMatch.Success) { $versionMatch.Groups[1].Value } else { "unknown" }
+Write-Host "source SHA256: $sourceHash"
+Write-Host "plugin version: $pluginVersion"
+
 $targetDir = Find-PotPlayerDir
 $translateDir = Join-Path $targetDir "Extension\Subtitle\Translate"
 
@@ -126,6 +132,11 @@ foreach ($pair in @(@($pluginFile, $targetAs), @($iconFile, $targetIco))) {
     }
     try {
         Copy-Item $source $target -Force
+        if ($target -eq $targetAs) {
+            $installedHash = (Get-FileHash $targetAs -Algorithm SHA256).Hash
+            if ($installedHash -ne $sourceHash) { throw "安装后 SHA256 不匹配: $targetAs" }
+            Write-Host "verified SHA256: $installedHash"
+        }
         Write-Host "installed: $target"
     } catch {
         throw "复制失败（可能需要管理员权限）: $target`n$($_.Exception.Message)"
@@ -139,3 +150,4 @@ if ($DryRun) {
 }
 Write-Host "安装完成。请重启 PotPlayer，然后在 字幕 -> 实时字幕翻译 中选择 AnyTranslate。"
 Write-Host "配置方法见 README.md。"
+

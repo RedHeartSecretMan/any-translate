@@ -355,12 +355,26 @@ class TestSpecParsing(unittest.TestCase):
         ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat")
         self.assertTrue(ok, msg=spec)
         self.assertEqual(spec.context_mode, "split")
-        self.assertEqual(spec.context_chars, 1600)
+        self.assertEqual(spec.context_chars, 2000)
         self.assertEqual(spec.glossary, ())
 
         ok, err = ref_impl.parse_spec("deepseek:deepseek-chat|contextmode=bad")
         self.assertFalse(ok)
         self.assertEqual(err.code, "bad_opts")
+
+    def test_headers_probe_timeout_and_debug2(self):
+        ok, spec = ref_impl.parse_spec(
+            "custom|http://h/v1/chat/completions|m|debug=2;probe_timeout=5000;headers=X-Client:abc|OpenAI-Beta:assistants=v2"
+        )
+        self.assertTrue(ok, msg=spec)
+        self.assertTrue(spec.debug)
+        self.assertEqual(spec.probe_timeout, 5000)
+        self.assertEqual(spec.headers, "X-Client:abc|OpenAI-Beta:assistants=v2")
+
+        ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat")
+        self.assertTrue(ok, msg=spec)
+        self.assertEqual(spec.probe_timeout, 10000)
+        self.assertEqual(spec.headers, "")
 
     def test_glossary_line_formats(self):
         cases = {
@@ -471,19 +485,18 @@ class TestSpecParsing(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("custom 需要完整 URL", err.message)
 
-    def test_custom_accepts_arbitrary_scheme_and_extra_fields(self):
-        # .as 不校验 URL scheme；opts 里出现 '|' 时作为 opts 内容保留
+    def test_custom_accepts_arbitrary_scheme(self):
+        # .as 不校验 URL scheme
         ok, spec = ref_impl.parse_spec("custom|ftp://h/x|m")
         self.assertTrue(ok, msg=spec)
         self.assertEqual(spec.url, "ftp://h/x")
-        ok, spec = ref_impl.parse_spec("custom|http://h/x|m|a=1|b=2")
-        self.assertTrue(ok, msg=spec)
 
     def test_uppercase_custom_prefix_is_treated_as_preset(self):
-        # .as StartsWith("custom|") 大小写敏感；"Custom|..." 会走 preset 分支
+        # .as StartsWith("custom|") 大小写敏感；"Custom|..." 会走 preset 分支，
+        # 后面的内容会被当成 opts，因此报 bad_opts。
         ok, err = ref_impl.parse_spec("Custom|http://h/x|m")
         self.assertFalse(ok)
-        self.assertEqual(err.code, "bad_spec")
+        self.assertEqual(err.code, "bad_opts")
 
     def test_invalid_auth_value(self):
         for line in (
@@ -542,10 +555,19 @@ class TestSpecParsing(unittest.TestCase):
         self.assertTrue(ok, msg=spec)
         self.assertEqual(spec.version, "2024-06-01")
 
-    def test_opts_unknown_and_malformed_ignored(self):
-        ok, spec = ref_impl.parse_spec(
-            "deepseek:deepseek-chat|future=1;broken;=x;;temp=0.6"
-        )
+    def test_opts_unknown_and_malformed_rejected(self):
+        for raw in (
+            "deepseek:deepseek-chat|future=1",
+            "deepseek:deepseek-chat|broken",
+            "deepseek:deepseek-chat|=x",
+            "deepseek:deepseek-chat|context=4",
+        ):
+            with self.subTest(raw=raw):
+                ok, err = ref_impl.parse_spec(raw)
+                self.assertFalse(ok)
+                self.assertEqual(err.code, "bad_opts")
+
+        ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat|temp=0.6")
         self.assertTrue(ok, msg=spec)
         self.assertAlmostEqual(spec.temperature, 0.6)
 
@@ -953,7 +975,7 @@ class TestRequestBuilding(unittest.TestCase):
                 self.assertEqual(body_of(req)["temperature"], expected)
 
     def test_style_and_context_options(self):
-        ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat|style=anime;context=6")
+        ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat|style=anime;contextitems=6")
         self.assertTrue(ok)
         self.assertEqual(spec.style, "anime")
         self.assertEqual(spec.context, 6)
@@ -962,11 +984,15 @@ class TestRequestBuilding(unittest.TestCase):
         ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat")
         self.assertTrue(ok)
         self.assertEqual(spec.style, "movie")
-        self.assertEqual(spec.context, 4)
+        self.assertEqual(spec.context, 16)
 
-        for value, expected in (("0", 0), ("99", 8), ("abc", 4)):
+        ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat|contextitems=20")
+        self.assertTrue(ok)
+        self.assertEqual(spec.context, 20)
+
+        for value, expected in (("0", 0), ("99", 32), ("abc", 16)):
             with self.subTest(value=value):
-                ok, spec = ref_impl.parse_spec(f"deepseek:deepseek-chat|context={value}")
+                ok, spec = ref_impl.parse_spec(f"deepseek:deepseek-chat|contextitems={value}")
                 self.assertTrue(ok)
                 self.assertEqual(spec.context, expected)
 

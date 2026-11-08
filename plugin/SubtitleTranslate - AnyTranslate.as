@@ -65,6 +65,7 @@ string g_key = "";
 bool g_configured = false;
 bool g_logged_out = false;
 bool g_debug = false;
+bool g_debug_verbose = false;
 bool g_console_opened = false;
 
 // 解析后的运行参数
@@ -76,6 +77,7 @@ string g_auth = "bearer";
 string g_keyname = "";
 string g_path = "";
 string g_body_template = "";
+string g_headers_template = "";
 string g_temperature = "0.2";
 string g_max_tokens = "";
 string g_probe = "models";
@@ -83,24 +85,28 @@ string g_extra_body = "";
 string g_version = "2023-06-01";
 bool g_minimal_body = false;
 string g_style = "movie";
-int g_context_limit = 4;
-int g_context_char_limit = 1600;
+int g_context_limit = 16;
+int g_context_char_limit = 2000;
 string g_context_mode = "split";
 array<string> g_glossary_src;
 array<string> g_glossary_dst;
 int g_deadline_ms = 6000;
+int g_probe_timeout_ms = 10000;
 
 // 上下文 / 缓存
 array<string> g_history_src;
 array<string> g_history_dst;
 array<string> g_ctx_src_sel;
 array<string> g_ctx_dst_sel;
-int MAX_HISTORY = 8;
+int MAX_HISTORY = 32;
 int MAX_GLOSSARY = 32;
 array<string> g_cache_keys;
 array<string> g_cache_vals;
+array<uint> g_cache_ticks;
 int CACHE_MAX = 64;
+int CACHE_TTL_MS = 600000;
 string g_context_key = "";
+string g_cache_scope = "";
 
 // 运行状态
 uint g_last_tick = 0;
@@ -115,6 +121,9 @@ string g_last_dst = "";
 string g_force_dst = "";
 string g_think = "";
 string g_pending_log = "";
+string g_http_headers = "";
+string g_last_media = "";
+int MAX_RESPONSE_BYTES = 2097152;
 
 // ===========================================================================
 // 服务商预设表
@@ -452,6 +461,12 @@ bool StartsWith(const string &in s, const string &in prefix)
     return s.Left(prefix.length()) == prefix;
 }
 
+bool EndsWith(const string &in s, const string &in suffix)
+{
+    if (suffix.length() > s.length()) return false;
+    return s.Right(suffix.length()) == suffix;
+}
+
 string StrReplaceAll(const string &in src, const string &in from, const string &in to)
 {
     if (from.empty()) return src;
@@ -661,7 +676,7 @@ int ParseBoundedInt(const string &in src, int fallback, int minValue, int maxVal
 // 语法: preset[:model][|opts]  或  custom|<endpoint>|<model>[|opts]
 int ParseContextLimit(const string &in src)
 {
-    return ParseBoundedInt(src, 4, 0, MAX_HISTORY);
+    return ParseBoundedInt(src, 16, 0, MAX_HISTORY);
 }
 
 int ParseDeadline(const string &in src)
@@ -762,11 +777,13 @@ string ParseSpec(const string &in specIn)
     string tempOpt = "";
     string maxTokOpt = "";
     string probeOpt = "";
+    string probeTimeoutOpt = "";
     string debugOpt = "";
+    string headersOpt = "";
     string versionOpt = "";
     string minimalOpt = "";
     string styleOpt = "";
-    string contextOpt = "";
+    string contextItemsOpt = "";
     string deadlineOpt = "";
     string dstOpt = "";
     string thinkOpt = "";
@@ -834,7 +851,7 @@ string ParseSpec(const string &in specIn)
         string kv = Trimmed(kvs[i]);
         if (kv.empty()) continue;
         int eq = kv.findFirst("=", 0);
-        if (eq <= 0) continue;
+        if (eq <= 0) return "opts 格式错误: " + kv;
         string k = Trimmed(kv.substr(0, eq));
         string v = Trimmed(kv.substr(eq + 1));
         if (k == "path") pathOpt = v;
@@ -844,17 +861,20 @@ string ParseSpec(const string &in specIn)
         else if (k == "temp") tempOpt = v;
         else if (k == "max_tokens") maxTokOpt = v;
         else if (k == "probe") probeOpt = v;
+        else if (k == "probe_timeout") probeTimeoutOpt = v;
         else if (k == "debug") debugOpt = v;
+        else if (k == "headers") headersOpt = v;
         else if (k == "version") versionOpt = v;
         else if (k == "minimal") minimalOpt = v;
         else if (k == "style") styleOpt = v;
-        else if (k == "context") contextOpt = v;
-        else if (k == "deadline") deadlineOpt = v;
-        else if (k == "dst") dstOpt = v;
-        else if (k == "think") thinkOpt = v;
+        else if (k == "contextitems") contextItemsOpt = v;
         else if (k == "contextmode") contextModeOpt = v;
         else if (k == "contextchars") contextCharsOpt = v;
         else if (k == "glossary") glossaryOpt = v;
+        else if (k == "deadline") deadlineOpt = v;
+        else if (k == "dst") dstOpt = v;
+        else if (k == "think") thinkOpt = v;
+        else return "未知选项: " + k;
     }
 
     provider = provider.MakeLower();
@@ -904,6 +924,7 @@ string ParseSpec(const string &in specIn)
 
     string probe = isCustom ? "none" : "models";
     if (!probeOpt.empty()) probe = probeOpt;
+    int probeTimeout = probeTimeoutOpt.empty() ? 10000 : ParseBoundedInt(probeTimeoutOpt, 10000, 1000, 60000);
 
     string temperature = "0.2";
     if (!tempOpt.empty()) temperature = tempOpt;
@@ -921,7 +942,7 @@ string ParseSpec(const string &in specIn)
     {
         return "style 只能是 movie/tv/anime/doc/tech/formal/casual";
     }
-    int contextLimit = contextOpt.empty() ? 4 : ParseContextLimit(contextOpt);
+    int contextLimit = contextItemsOpt.empty() ? 16 : ParseContextLimit(contextItemsOpt);
     if (contextLimit < 0) contextLimit = 0;
     if (contextLimit > MAX_HISTORY) contextLimit = MAX_HISTORY;
     int deadlineMs = deadlineOpt.empty() ? 6000 : ParseDeadline(deadlineOpt);
@@ -961,7 +982,7 @@ string ParseSpec(const string &in specIn)
     {
         return "contextmode 只能是 block / split / turns";
     }
-    int contextChars = contextCharsOpt.empty() ? 1600 : ParseBoundedInt(contextCharsOpt, 1600, 0, 8000);
+    int contextChars = contextCharsOpt.empty() ? 2000 : ParseBoundedInt(contextCharsOpt, 2000, 0, 4000);
 
     array<string> glossarySrc;
     array<string> glossaryDst;
@@ -1019,10 +1040,12 @@ string ParseSpec(const string &in specIn)
     g_path = path;
     g_keyname = keyname;
     g_body_template = bodyOpt;
+    g_headers_template = headersOpt;
     g_temperature = temperature;
     g_max_tokens = maxTokens;
     g_probe = probe;
-    g_debug = (debug == "1" || debug.MakeLower() == "true");
+    g_debug = (debug == "1" || debug == "2" || debug.MakeLower() == "true");
+    g_debug_verbose = (debug == "2");
     g_version = version;
     g_extra_body = extraBody;
     g_minimal_body = (minimalOpt == "1" || minimalOpt.MakeLower() == "true");
@@ -1038,6 +1061,7 @@ string ParseSpec(const string &in specIn)
         g_glossary_dst.insertLast(glossaryDst[gi]);
     }
     g_deadline_ms = deadlineMs;
+    g_probe_timeout_ms = probeTimeout;
     g_force_dst = forceDst;
     g_think = think;
     g_spec = spec;
@@ -1088,6 +1112,7 @@ void ClearCache()
 {
     g_cache_keys.resize(0);
     g_cache_vals.resize(0);
+    g_cache_ticks.resize(0);
 }
 
 void ClearContext()
@@ -1166,30 +1191,64 @@ string BuildGlossaryText()
     return res + "\n\n";
 }
 
-int CacheFind(const string &in key)
+string CacheKey(const string &in text)
 {
+    string key = g_cache_scope + "\n" + text;
+    // 上下文感知翻译的结果依赖最近台词；把实际选中的历史对放进 key，
+    // 避免同一句台词在不同语境下直接复用旧译文。
+    for (int i = 0; i < g_ctx_src_sel.size(); i++)
+    {
+        key += "\n<CTX:" + formatInt(i) + ">" + g_ctx_src_sel[i] +
+               "\n<OUT:" + formatInt(i) + ">" + g_ctx_dst_sel[i];
+    }
+    return key;
+}
+
+int CacheFind(const string &in text)
+{
+    string key = CacheKey(text);
+    uint now = HostGetTickCount();
     for (int i = 0; i < g_cache_keys.size(); i++)
     {
-        if (g_cache_keys[i] == key) return i;
+        if (g_cache_keys[i] != key) continue;
+        if (g_cache_ticks[i] > uint(0) &&
+            (now - g_cache_ticks[i]) > uint(CACHE_TTL_MS))
+        {
+            g_cache_keys.removeAt(i);
+            g_cache_vals.removeAt(i);
+            g_cache_ticks.removeAt(i);
+            return -1;
+        }
+        g_cache_ticks[i] = now;
+        return i;
     }
     return -1;
 }
 
-void CachePut(const string &in key, const string &in val)
+void CachePut(const string &in text, const string &in val)
 {
-    int i = CacheFind(key);
+    string key = CacheKey(text);
+    int i = CacheFind(text);
     if (i >= 0)
     {
         g_cache_vals[i] = val;
+        g_cache_ticks[i] = HostGetTickCount();
         return;
     }
     if (g_cache_keys.size() >= CACHE_MAX)
     {
-        g_cache_keys.removeAt(0);
-        g_cache_vals.removeAt(0);
+        int victim = 0;
+        for (int j = 1; j < g_cache_ticks.size(); j++)
+        {
+            if (g_cache_ticks[j] < g_cache_ticks[victim]) victim = j;
+        }
+        g_cache_keys.removeAt(victim);
+        g_cache_vals.removeAt(victim);
+        g_cache_ticks.removeAt(victim);
     }
     g_cache_keys.insertLast(key);
     g_cache_vals.insertLast(val);
+    g_cache_ticks.insertLast(HostGetTickCount());
 }
 
 // ===========================================================================
@@ -1542,6 +1601,28 @@ string BuildUrl()
     return AppendQueryAuth(url);
 }
 
+string BuildExtraHeaders()
+{
+    if (g_provider != "custom" || g_headers_template.empty()) return "";
+    string res = "";
+    array<string> entries = SplitStr(g_headers_template, "|");
+    for (int i = 0; i < entries.size(); i++)
+    {
+        string entry = Trimmed(entries[i]);
+        if (entry.empty()) continue;
+        int colon = entry.findFirst(":", 0);
+        if (colon <= 0) continue;
+        string name = Trimmed(entry.Left(colon));
+        string value = Trimmed(entry.substr(colon + 1));
+        if (name.empty() || value.empty()) continue;
+        // 防止 header/值注入换行。
+        if (name.findFirst("\r", 0) >= 0 || name.findFirst("\n", 0) >= 0) continue;
+        if (value.findFirst("\r", 0) >= 0 || value.findFirst("\n", 0) >= 0) continue;
+        res += name + ": " + value + "\r\n";
+    }
+    return res;
+}
+
 string BuildHeaders()
 {
     string headers = "Content-Type: application/json\r\nAccept: application/json\r\n";
@@ -1554,6 +1635,7 @@ string BuildHeaders()
         headers += g_keyname + ": " + g_key + "\r\n";
         if (g_proto == "anthropic") headers += "anthropic-version: " + g_version + "\r\n";
     }
+    headers += BuildExtraHeaders();
     return headers;
 }
 
@@ -1725,7 +1807,36 @@ string JoinModels(array<string> models, int maxCount)
 string ProbeUrl()
 {
     string url = "";
-    if (g_proto == "openai") url = g_base + "/models";
+    if (g_provider == "custom")
+    {
+        // custom 的 endpoint 通常是 .../v1/chat/completions；probe=models 时
+        // 去掉查询串并派生出 .../v1/models，便于登录时查看可用模型。
+        string base = g_base;
+        int q = base.findFirst("?", 0);
+        if (q >= 0) base = base.Left(q);
+        if (EndsWith(base, "/chat/completions"))
+        {
+            base = base.Left(base.length() - 17) + "/models";
+        }
+        else if (EndsWith(base, "/completions"))
+        {
+            base = base.Left(base.length() - 12) + "/models";
+        }
+        else if (EndsWith(base, "/responses"))
+        {
+            base = base.Left(base.length() - 10) + "/models";
+        }
+        else if (EndsWith(base, "/v1"))
+        {
+            base = base + "/models";
+        }
+        else
+        {
+            base = base + "/models";
+        }
+        url = base;
+    }
+    else if (g_proto == "openai") url = g_base + "/models";
     else if (g_proto == "ollama") url = g_base + "/api/tags";
     else if (g_proto == "anthropic") url = g_base + "/v1/models";
     else if (g_proto == "gemini") url = g_base + "/v1beta/models";
@@ -1736,15 +1847,14 @@ string ProbeUrl()
 string Probe()
 {
     if (g_probe == "none") return "";
-    if (g_provider == "custom") return "";
     string url = ProbeUrl();
     if (url.empty()) return "";
 
     int status = 0;
     string content = "";
-    if (!HttpExchange(url, BuildHeaders(), "", 20000, status, content))
+    if (!HttpExchange(url, BuildHeaders(), "", g_probe_timeout_ms, status, content))
     {
-        return "无法连接 " + g_base + "（检查地址、端口、网络或代理）";
+        return "无法连接 " + url + "（检查地址、端口、网络或代理）";
     }
 
     if (status == 401 || status == 403)
@@ -2251,13 +2361,21 @@ bool HttpExchange(const string &in url, const string &in headers, const string &
 {
     outStatus = 0;
     outContent = "";
+    g_http_headers = "";
     HostIncTimeOut(timeoutMs);
 
     uintptr http = HostOpenHTTP(url, USER_AGENT, headers, body, true);
     if (http == 0) return false;
     outStatus = HostGetStatusHTTP(http);
     outContent = HostGetContentHTTP(http);
+    g_http_headers = HostGetHeaderHTTP(http);
     HostCloseHTTP(http);
+    if (outContent.length() > MAX_RESPONSE_BYTES)
+    {
+        outStatus = 0;
+        outContent = "";
+        return false;
+    }
     return true;
 }
 
@@ -2278,7 +2396,8 @@ bool SendOnce(const string &in url, const string &in headers, const string &in b
     g_http_status = status;
     g_http_body = content;
 
-    Dbg("HTTP " + formatInt(status) + " <- " + Truncate(content, 500));
+    Dbg("HTTP " + formatInt(status) + " <- " + formatInt(content.length()) + " bytes");
+    if (g_debug_verbose) Dbg("HTTP body=" + Truncate(content, 500));
 
     if (status < 200 || status >= 300) return false;
 
@@ -2362,6 +2481,32 @@ int RemainingBudget(uint startTick)
     return g_deadline_ms - int(elapsed);
 }
 
+int RetryAfterMs(int fallbackMs)
+{
+    string headers = g_http_headers.MakeLower();
+    int pos = headers.findFirst("retry-after:", 0);
+    if (pos < 0) return fallbackMs;
+    pos += 12;
+    while (pos < headers.length() &&
+           (headers.substr(pos, 1) == " " || headers.substr(pos, 1) == "\t"))
+    {
+        pos++;
+    }
+    int value = 0;
+    bool found = false;
+    while (pos < headers.length())
+    {
+        string ch = headers.substr(pos, 1);
+        if (ch < "0" || ch > "9") break;
+        value = value * 10 + DigitToInt(ch);
+        found = true;
+        pos++;
+    }
+    if (!found || value <= 0) return fallbackMs;
+    if (value > 60) value = 60;
+    return value * 1000;
+}
+
 // ===========================================================================
 // 翻译主流程
 // ===========================================================================
@@ -2379,7 +2524,8 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
 
     if (IsNonDialogueText(raw))
     {
-        Dbg("skip non-dialogue: " + Truncate(raw, 40));
+        Dbg("skip non-dialogue: len=" + formatInt(raw.length()));
+        if (g_debug_verbose) Dbg("skip non-dialogue text=" + Truncate(raw, 40));
         SrcLang = "UTF8";
         DstLang = "UTF8";
         return raw;
@@ -2434,6 +2580,15 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
         return "";
     }
 
+    // 切换播放文件时清历史，避免上一部视频的台词串到下一部。
+    string media = HostGetPlayingFileName();
+    if (!media.empty() && !g_last_media.empty() && media != g_last_media)
+    {
+        ClearContext();
+        Dbg("context reset after media change");
+    }
+    if (!media.empty()) g_last_media = media;
+
     // 长时间暂停后重置上下文，避免不同片段串味
     uint now = HostGetTickCount();
     if (g_last_tick > uint(0) && (now - g_last_tick) > uint(120000))
@@ -2452,6 +2607,12 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
         g_context_key = ctxKey;
     }
 
+    g_cache_scope = "p4|" + g_provider + "|" + g_model + "|" + g_base + "|" + SrcLang + "|" + dstLabel +
+                    "|" + g_style + "|" + g_context_mode + "|" + formatInt(g_context_limit) +
+                    "|" + formatInt(g_context_char_limit) + "|" + g_path + "|" + g_body_template +
+                    "|" + g_temperature + "|" + g_max_tokens + "|" + g_think + "|" + BuildGlossaryText();
+    SelectContext();
+
     // 中文简繁转换不需要经过模型：目标简体且原文可判断为中文时直接逐字转换。
     // 这样既避免模型把繁体原样复制，也避免模型擅自改写语义。
     string dstCode = LangCodeFor(dstLabel);
@@ -2469,6 +2630,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
     int hit = CacheFind(raw);
     if (hit >= 0)
     {
+        g_fail_count = 0;
         PushHistory(raw, g_cache_vals[hit]);
         SrcLang = "UTF8";
         DstLang = "UTF8";
@@ -2488,14 +2650,16 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
     string userText = BuildUserBlock(raw);
     string prompt = BuildPrompt(raw, srcName, dstName, dstLabel, true);
 
-    Dbg("translate: " + Truncate(raw, 80) + " mode=" + contextMode);
+    Dbg("translate: len=" + formatInt(raw.length()) + " mode=" + contextMode);
+    if (g_debug_verbose) Dbg("translate text=" + Truncate(raw, 80));
 
     string url = BuildUrl();
     string headers = BuildHeaders();
     string body = BuildBodyPipeline(systemText, contextText, userText, prompt,
                                     raw, srcName, dstName, g_minimal_body,
                                     contextMode, true);
-    Dbg("POST " + SafeUrl(url) + " body=" + Truncate(body, 500));
+    Dbg("POST " + SafeUrl(url) + " body_len=" + formatInt(body.length()));
+    if (g_debug_verbose) Dbg("POST body=" + Truncate(body, 500));
 
     uint startTick = HostGetTickCount();
     string result = "";
@@ -2541,7 +2705,12 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
     if (!ok && (g_http_status == 429 || g_http_status >= 500) &&
         RemainingBudget(startTick) > 1200)
     {
-        HostSleep(400);
+        int waitMs = RetryAfterMs(g_http_status == 429 ? 400 : 600);
+        int remain = RemainingBudget(startTick);
+        if (waitMs > remain - 600) waitMs = remain - 600;
+        if (waitMs < 50) waitMs = 50;
+        Dbg("retry after " + formatInt(waitMs) + "ms (HTTP " + formatInt(g_http_status) + ")");
+        HostSleep(waitMs);
         if (RemainingBudget(startTick) > 500)
         {
             ok = SendOnce(url, headers, body, result, RemainingBudget(startTick));
@@ -2662,10 +2831,9 @@ string ServerLogin(string User, string Pass)
     g_key = key;
     g_spec = spec;
 
-    // custom 允许无 Key（可能是 auth=none 的本机服务）；预设按协议要求 Key
-    if (g_auth != "none" && g_key.empty() && g_provider != "custom")
+    // 任何需要鉴权的请求都必须在登录时提供 Key；本机无鉴权请显式 auth=none。
+    if (g_auth != "none" && g_key.empty())
     {
-        // 登录失败时禁用运行期翻译，避免用未验证的配置逐行请求
         g_logged_out = true;
         g_last_error = "缺少 API Key";
         return "请在密码框填写 API Key（本机服务可把 auth 设为 none）";
@@ -2706,6 +2874,7 @@ void ServerLogout()
     g_provider = "";
     g_last_error = "";
     g_last_dst = "";
+    g_last_media = "";
     HostSaveString("anytr_key", "");
     HostSaveString("anytr_spec", "");
     ClearContext();
@@ -2759,3 +2928,4 @@ array<string> GetDstLangs()
     }
     return ret;
 }
+
