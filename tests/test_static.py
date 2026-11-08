@@ -338,6 +338,28 @@ class PluginStaticTest(unittest.TestCase):
         self.assertEqual(pairs.get("這"), "这")
         self.assertEqual(pairs.get("們"), "们")
 
+    def test_pipeline_contract(self) -> None:
+        text = DEFAULT_SCRIPT.read_text(encoding="utf-8")
+        for needle in (
+            'contextmode',
+            'contextchars',
+            'glossary',
+            'BuildSystemPrompt',
+            'BuildContextBlock',
+            'BuildBodyPipeline',
+            'BuildMessagesJson',
+            'EffectiveContextMode',
+            'bodySystem',
+            '【硬性要求】',
+            '【背景信息',
+            '【术语对照】',
+            '只翻译最后一条 user 消息里的【待翻译文本】',
+            'ReadGlossaryFile',
+            'ParseGlossaryLine',
+            'HostFileOpen',
+        ):
+            self.assertIn(needle, text)
+
 
 if __name__ == "__main__":
     unittest.main()

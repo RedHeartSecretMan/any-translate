@@ -20,6 +20,8 @@
 - 目标为简体中文且原文可判断为中文时，直接做繁简转换，避免模型保留繁体字或改写语义。
 - 新增上下文泄漏检测：模型把“- 原文/译文”历史块复述进字幕时，重试一次并改用无上下文的提示词。
 - 新增 `think=0/1` 选项，可按 DeepSeek/Moonshot/Zhipu、Qwen/SiliconFlow、OpenRouter、vLLM/SGLang/LM Studio/custom、OpenAI 系、Ollama、Gemini 的对应字段关闭/开启 thinking；显式设置会覆盖预设自带字段。
+- 新增上下文感知流水线：`contextmode=block|split|turns`、历史字符预算 `contextchars`、术语表 `glossary`；默认 `split`，历史放入 `【背景信息】`、当前句放入 `【待翻译文本】`，提示词结构参考 Index-Translate / Hy-MT2 官方模板。
+- `glossary` 支持 `@路径` / `file:路径` 读取本地 UTF-8 词表，按行解析 `=`、`=>`、`->`、`→`、`|`、Tab 分隔，`#` 为注释。
 - `style=movie|tv|anime|doc|tech|formal|casual` 翻译风格模板，按题材追加提示词规则；默认 `movie`。
 - `context=0..8` 可调上下文窗口；历史同时保存原文与译文，提示词给出最近 N 组对照。
 - `deadline=2000..20000` 单条字幕总预算（默认 6 s）；预算内才继续降级、429/5xx 与质量重试。

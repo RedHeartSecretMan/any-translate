@@ -72,7 +72,7 @@ Python 解释器使用 PATH 中的 `python`（3.10+，契约测试只用标准�
 spec   := preset [":" model] ["|" opts]
         | "custom" "|" url ["|" model ["|" opts]]
 opts   := kv (";" kv)*        kv := key "=" value
-keys   := path | auth | keyname | body | temp | max_tokens | probe | debug | version | minimal | style | context | deadline | dst | think
+keys   := path | auth | keyname | body | temp | max_tokens | probe | debug | version | minimal | style | context | contextmode | contextchars | glossary | deadline | dst | think
 auth   := bearer | x-api-key | query | none
 ```
 
@@ -330,7 +330,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
    `DEFAULT_ANTHROPIC_VERSION=2023-06-01`。
 2. **spec 解析**：`parse_spec` ↔ `ParseSpec`；对照 `TestSpecParsing` 全部用例：
    空 spec、preset 默认模型、第一个 `:` 切分、任意 spec 的 `|opts`、
-   15 个 opts key、容错与非法输入文案、custom 省略 model、大小写。
+   18 个 opts key、容错与非法输入文案、custom 省略 model、大小写。
 3. **URL**：`build_url` ↔ `BuildUrl` + `AppendQueryAuth`；`test_all_preset_chat_urls`、
    `test_gemini_key_never_in_url`、custom/`auth=query` 用例
    （gemini/openai/anthropic 的 `?key=`、显式 keyname、无认证头）。
@@ -406,3 +406,5 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 最后更新：2026-11-07（0.1.0：style/context/deadline、目标语言规则、译文质量门、
 非对白过滤；同时回归 SafeUrl 编码脱敏 / auth=query 归一化 / MaskKey <16 /
 ErrorHint 404 / JsonEscape 剔除 C0；216 用例全部通过，`run_tests.ps1` 一键 PASS）。
+
+

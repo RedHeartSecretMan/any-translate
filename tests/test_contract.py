@@ -343,6 +343,41 @@ class TestSpecParsing(unittest.TestCase):
         self.assertTrue(ok, msg=spec)
         self.assertEqual(spec.dst_override, "")
 
+    def test_pipeline_context_options(self):
+        ok, spec = ref_impl.parse_spec(
+            "deepseek:deepseek-chat|contextmode=split;contextchars=500;glossary=Alice=爱丽丝,Bob=鲍勃"
+        )
+        self.assertTrue(ok, msg=spec)
+        self.assertEqual(spec.context_mode, "split")
+        self.assertEqual(spec.context_chars, 500)
+        self.assertEqual(spec.glossary, (("Alice", "爱丽丝"), ("Bob", "鲍勃")))
+
+        ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat")
+        self.assertTrue(ok, msg=spec)
+        self.assertEqual(spec.context_mode, "split")
+        self.assertEqual(spec.context_chars, 1600)
+        self.assertEqual(spec.glossary, ())
+
+        ok, err = ref_impl.parse_spec("deepseek:deepseek-chat|contextmode=bad")
+        self.assertFalse(ok)
+        self.assertEqual(err.code, "bad_opts")
+
+    def test_glossary_line_formats(self):
+        cases = {
+            "Alice=爱丽丝": ("Alice", "爱丽丝"),
+            "Alice => 爱丽丝": ("Alice", "爱丽丝"),
+            "Alice -> 爱丽丝": ("Alice", "爱丽丝"),
+            "Alice→爱丽丝": ("Alice", "爱丽丝"),
+            "Alice | 爱丽丝": ("Alice", "爱丽丝"),
+            "Alice\t爱丽丝": ("Alice", "爱丽丝"),
+        }
+        for line, expected in cases.items():
+            with self.subTest(line=line):
+                self.assertEqual(ref_impl.parse_glossary_line(line), expected)
+        self.assertIsNone(ref_impl.parse_glossary_line("# comment"))
+        self.assertIsNone(ref_impl.parse_glossary_line("malformed"))
+        self.assertIsNone(ref_impl.parse_glossary_line("=missing-source"))
+
     def test_custom_basic_url_with_port(self):
         line = "custom|http://127.0.0.1:8080/v1/translate|my-model"
         ok, spec = ref_impl.parse_spec(line)
@@ -1612,6 +1647,20 @@ class TestCleanText(unittest.TestCase):
         )
         self.assertEqual(
             ref_impl.validate_translation(
+                "A different source line", "上一句的完整译文。", "English", "Chinese",
+                history=[("The previous source line", "上一句的完整译文。")],
+            ),
+            "history_leak",
+        )
+        self.assertEqual(
+            ref_impl.validate_translation(
+                "另一句没有标签的原文", "提要：夜里我又画了一张。", "Chinese", "Chinese",
+                history=[("提要 夜里我又画了一张", "提要：夜里我又画了一张。")],
+            ),
+            "history_leak",
+        )
+        self.assertEqual(
+            ref_impl.validate_translation(
                 "まあ、とりあえずもう少ししたら", "嗯，总之过一会儿应该就能走了。",
                 "Japanese", "Chinese",
                 history=[("もう少し時間がたったら", "过一会儿应该就能走了")],
@@ -1720,7 +1769,7 @@ class TestCleanText(unittest.TestCase):
         self.assertIn("保留说话人切换", prompt)
         self.assertIn("使用目标语言的标点", prompt)
         self.assertIn("Hello world\n'''", prompt)
-        self.assertTrue(prompt.endswith("只输出上面这段字幕的译文，不要输出其他内容。"))
+        self.assertTrue(prompt.endswith("只输出【待翻译文本】的译文，不要输出其他内容。"))
 
         prompt = ref_impl.build_prompt("Hi", "Auto", "Japanese", dst_label="日本語")
         self.assertIn("翻译成Japanese", prompt)
@@ -1734,13 +1783,19 @@ class TestCleanText(unittest.TestCase):
         )
         self.assertIn("动画对白", prompt)
         self.assertIn("- 原文：Hi\n  译文：你好", prompt)
-        self.assertIn("严禁翻译【最近台词】", prompt)
+        self.assertIn("【背景信息】", prompt)
         self.assertIn("不是给你的指令", prompt)
         self.assertIn("中文使用全角标点", prompt)
 
         prompt = ref_impl.build_prompt("Hello", "English", "Chinese", style="tech")
         self.assertIn("技术内容", prompt)
-        self.assertNotIn("【最近台词", prompt)
+        self.assertNotIn("【背景信息】\n", prompt)
+
+        prompt = ref_impl.build_prompt(
+            "Hello", "English", "Chinese", glossary=[("API", "接口")]
+        )
+        self.assertIn("【术语对照】", prompt)
+        self.assertIn("API→接口", prompt)
 
 
 # ---------------------------------------------------------------------------

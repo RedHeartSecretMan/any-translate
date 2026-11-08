@@ -53,6 +53,7 @@ any-translate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译
 | 自动降级 | 服务端拒绝 `temperature` / `max_tokens` 时改用最小请求体并记住 |
 | 诊断模式 | `debug=1` 打开脚本控制台，查看状态码、耗时与脱敏后的响应 |
 | 82 种语言 | 插件返回语言代码，菜单名称由 PotPlayer 本地化显示；提示词映射为双语语言名 |
+| 上下文流水线 | 默认 `split`；规则进 system，背景信息/待翻译文本分离；支持 `block`/`turns` 切换 |
 | 隐私默认 | 无遥测；Key 由 PotPlayer 的 `HostSaveString` 保存在本机（非加密） |
 
 ## 快速开始
@@ -142,7 +143,7 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 - `preset` 不区分大小写；`model` 只按**第一个** `:` 切分，所以 `ollama:qwen3:4b` 合法。
 - 任意 spec 都可以在结尾用 `|` 追加 opts（预设与 custom 都支持）。
 - `custom` 的 `endpoint_url` 是完整请求地址，不再追加协议路径。
-- `opts` 用 `;` 分隔、`=` 赋值；可用：`path`、`auth`、`keyname`、`body`、`temp`、`max_tokens`、`minimal`、`version`、`probe`、`debug`、`style`、`context`、`deadline`、`dst`、`think`。
+- `opts` 用 `;` 分隔、`=` 赋值；可用：`path`、`auth`、`keyname`、`body`、`temp`、`max_tokens`、`minimal`、`version`、`probe`、`debug`、`style`、`context`、`contextmode`、`contextchars`、`glossary`、`deadline`、`dst`、`think`。
 - `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`（没有转义机制）。
 - `auth=query` 会把 Key 拼进 URL（参数名 `keyname`，默认 `key`）；能走请求头就别用 query，Key 会出现在代理/网关日志里。`auth=query` 只对支持 URL 鉴权的服务有意义（Gemini、部分自定义网关）；OpenAI / Anthropic 官方接口不接受 query 鉴权，会以 401 明确失败。
 - 密码框留空时沿用上次保存的 Key；用户框留空时沿用上次保存的 spec。
@@ -163,11 +164,55 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 | `debug` | `1` = 打开诊断控制台 | `0` |
 | `style` | 翻译风格：`movie` / `tv` / `anime` / `doc` / `tech` / `formal` / `casual` | `movie` |
 | `context` | 最近原文+译文组数，`0..8` | `4` |
+| `contextmode` | `split` 默认；`block` 单条 user；`turns` 历史独立轮次；custom body 模板回退 block | `split` |
+| `contextchars` | 历史上下文预算（UTF-8 字节），`0..8000`；`0` 不限 | `1600` |
+| `glossary` | 术语表：内联 `原文=译名,...`，或 `@路径` / `file:路径` 指向本地 UTF-8 词表；最多 32 条 | 空 |
 | `deadline` | 单条字幕总预算（毫秒），`2000..20000` | `6000` |
 | `dst` | 强制目标语言代码，绕过宿主目标语言缓存；接受 `ko`、`zh-CN` 等 | 跟随界面选择 |
 | `think` | `0` 关闭 thinking，`1` 开启；按服务商发送对应字段（DeepSeek/Moonshot/Zhipu 的 `thinking.type`、Qwen/SiliconFlow 的 `enable_thinking`、OpenRouter 的 `reasoning.enabled`、vLLM/SGLang/LM Studio/custom 的 `chat_template_kwargs`、OpenAI/Groq/xAI/Together/Mistral 的 `reasoning_effort`、Ollama 的 `think`、Gemini 的 `thinkingConfig`） | 不发送 |
 
-注意各选项的生效范围：`body` 只对 `custom` 生效；`path`/`auth`/`keyname`/`probe` 对任意 spec 生效；`dst` 强制覆盖界面目标语言，适合 PotPlayer 运行中切换目标语言不生效时使用；`think` 按服务商映射，显式设置时会覆盖预设自带的 thinking 字段，若某服务拒绝该字段请删掉它或用 `body` 模板；`version` 只对 Anthropic 请求头生效；`probe=models` 只对预设生效（`custom` 登录不做自检）。
+注意各选项的生效范围：`body` 只对 `custom` 生效；`path`/`auth`/`keyname`/`probe` 对任意 spec 生效；`dst` 强制覆盖界面目标语言，适合 PotPlayer 运行中切换目标语言不生效时使用；`contextmode`/`contextchars`/`glossary` 只影响上下文流水线，默认 `split`，`custom` 带 body 模板时回退 block；`think` 按服务商映射，显式设置时会覆盖预设自带的 thinking 字段，若某服务拒绝该字段请删掉它或用 `body` 模板；`version` 只对 Anthropic 请求头生效；`probe=models` 只对预设生效（`custom` 登录不做自检）。
+
+提示词采用官方模板的分段方式：任务与硬性要求放在 system；历史放进 `【背景信息】`；当前句放进 `【待翻译文本】`；术语使用 `A→B` 的 `【术语对照】`。这样既保留影视字幕规则，又避免把所有内容混成一大段文本。
+
+### 本地术语表文件
+
+`glossary` 除内联写法外，还支持本地 UTF-8 文件：
+
+```text
+glossary=@C:\Users\WangHao\Documents\any-translate\glossary.txt
+glossary=file:C:\Users\WangHao\Documents\any-translate\glossary.txt
+```
+
+文件每行一个词条，支持以下分隔符：
+
+```text
+# 注释行
+安妮=Annie
+魔法 => magic
+咒语 -> spell
+魔杖 → wand
+霍格沃茨 | Hogwarts
+Harry	Harry
+```
+
+`Harry	Harry` 中间是制表符。
+
+规则：
+
+- 空行和 `#` 开头行忽略；
+- 最多读取 32 条，文件最大 64 KB；
+- 使用 UTF-8 编码，建议无 BOM；
+- 文件在登录/确定配置时读取，修改文件后需重新登录；
+- 文件不存在、无法读取或没有有效词条时，登录会返回中文错误；
+- 路径不能包含 `;` 或 `|`（它们是配置串分隔符），建议使用绝对路径。
+
+文件内容最终会写入：
+
+```text
+【术语对照】
+安妮→Annie、魔法→magic
+```
 
 ### 翻译风格
 
@@ -327,3 +372,7 @@ powershell -ExecutionPolicy Bypass -File tests\run_tests.ps1
 ## 许可
 
 [MIT](LICENSE) 版权所有 (c) 2026 RedHeartSecretMan
+
+
+
+
