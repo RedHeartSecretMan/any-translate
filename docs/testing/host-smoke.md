@@ -5,7 +5,8 @@
 ## 1. 安装核对
 
 ```powershell
-$source = "C:\Users\WangHao\Documents\deepseek-harness\default-workspace\any-translate\plugin\SubtitleTranslate - AnyTranslate.as"
+$repo = "C:\path\to\any-translate"
+$source = Join-Path $repo "plugin\SubtitleTranslate - AnyTranslate.as"
 $target = "C:\Program Files\DAUM\PotPlayer\Extension\Subtitle\Translate\SubtitleTranslate - AnyTranslate.as"
 Get-FileHash $source, $target -Algorithm SHA256
 ```

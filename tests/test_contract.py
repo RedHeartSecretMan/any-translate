@@ -30,6 +30,7 @@ import re
 import socket
 import sys
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -815,6 +816,27 @@ class TestRequestBuilding(unittest.TestCase):
         line = f"custom|{CUSTOM_PLACEHOLDER_URL}|m|auth=bearer"
         req = request_of(line, key="k1")
         self.assertEqual(req.headers["Authorization"], "Bearer k1")
+
+    def test_custom_headers_are_serialized(self):
+        line = (
+            "custom|http://h/v1/chat/completions|m|"
+            "headers=X-Client:AnyTranslate|OpenAI-Beta:assistants=v2"
+        )
+        spec = spec_of(line)
+        req = ref_impl.build_request(spec, "k", "Hello", src="English", dst="Chinese")
+        self.assertTrue(req[0], msg=req)
+        req = req[1]
+        self.assertEqual(req.headers["X-Client"], "AnyTranslate")
+        self.assertEqual(req.headers["OpenAI-Beta"], "assistants=v2")
+
+    def test_custom_headers_reject_malformed(self):
+        for bad in ("headers=NoColon", "headers=:v", "headers=X:"):
+            with self.subTest(bad=bad):
+                ok, err = ref_impl.parse_spec(
+                    f"custom|http://h/v1/chat/completions|m|{bad}"
+                )
+                self.assertFalse(ok)
+                self.assertEqual(err.code, "bad_opts", msg=str(err))
 
     def test_custom_auth_x_api_key_header_name(self):
         line = f"custom|{CUSTOM_PLACEHOLDER_URL}|m|auth=x-api-key;keyname=api-key"
@@ -1652,14 +1674,52 @@ class TestCleanText(unittest.TestCase):
         self.assertEqual(len(ref_impl.KNOWN_PREFIXES), 14)
         self.assertEqual(len(set(ref_impl.KNOWN_PREFIXES)), 14)
 
+    def test_leading_label_leak_respects_source_colon_range(self):
+        history = [("previous source", "Synopsis: previous line")]
+        self.assertFalse(
+            ref_impl.looks_like_leading_label_leak(
+                "Synopsis: current line", "Note: current source", history
+            )
+        )
+        self.assertTrue(
+            ref_impl.looks_like_leading_label_leak(
+                "Synopsis: current line",
+                "This source has a colon only after twenty bytes: yes",
+                history,
+            )
+        )
+
+    def test_history_leak_markers_cover_prompt_labels(self):
+        cases = (
+            "- 译文：你好",
+            "原文: Hello",
+            "【背景信息】内容",
+            "【待翻译文本】内容",
+        )
+        for result in cases:
+            with self.subTest(result=result):
+                self.assertEqual(
+                    ref_impl.validate_translation("Hello", result, "English", "Chinese"),
+                    "history_leak",
+                )
+
     def test_validate_translation(self):
         self.assertEqual(ref_impl.validate_translation("Hello world", "你好，世界", "English", "Chinese"), "")
         self.assertEqual(ref_impl.validate_translation("Hello world", "Hello world", "English", "Chinese"), "echo")
         self.assertEqual(ref_impl.validate_translation("ok", "ok", "English", "Chinese"), "")
         self.assertEqual(ref_impl.validate_translation("Hello", "This is an English sentence", "English", "Chinese"), "wrong_script")
+        self.assertEqual(ref_impl.validate_translation("你好", "你好", "Chinese", "English"), "wrong_script")
+        self.assertEqual(ref_impl.validate_translation("你好", "你好", "Chinese", "nl"), "wrong_script")
         self.assertEqual(ref_impl.validate_translation("Hello", "NASA", "English", "Chinese"), "")
         self.assertEqual(ref_impl.validate_translation("Hello", "Mr. Smith", "English", "Chinese"), "")
         self.assertEqual(ref_impl.validate_translation("Hello", "", "English", "Chinese"), "empty")
+        self.assertEqual(
+            ref_impl.validate_translation(
+                "A different source line", "上一句的完整译文。", "English", "Chinese",
+                history=[],
+            ),
+            "",
+        )
         self.assertEqual(
             ref_impl.validate_translation("Hello", "- 原文：Hello\n译文：你好", "English", "Chinese"),
             "history_leak",
@@ -1729,6 +1789,59 @@ class TestCleanText(unittest.TestCase):
         for value in ("Hello", "[door slams]", "你好", "2024 年"):
             with self.subTest(value=value):
                 self.assertFalse(ref_impl.is_non_dialogue_text(value))
+
+    def test_normalize_source_key(self):
+        for source in ("English", "ENGLISH", "en"):
+            self.assertEqual(ref_impl.normalize_source_key(source), "en")
+        self.assertEqual(ref_impl.normalize_source_key("简体中文"), "zh-CN")
+        self.assertEqual(ref_impl.normalize_source_key("zh-CN"), "zh-CN")
+        for source in ("", None, "Auto", "自动检测", "UTF8"):
+            self.assertEqual(ref_impl.normalize_source_key(source), "auto")
+        self.assertEqual(ref_impl.normalize_source_key("ja"), "ja")
+
+    def test_target_script_policy(self):
+        self.assertEqual(
+            ref_impl.validate_translation("Hello", "そうですね", "English", "Chinese"),
+            "wrong_script",
+        )
+        self.assertEqual(
+            ref_impl.validate_translation("Hello", "안녕하세요", "English", "Chinese"),
+            "wrong_script",
+        )
+        self.assertEqual(
+            ref_impl.validate_translation("Hello", "김치", "English", "Chinese"),
+            "wrong_script",
+        )
+        self.assertEqual(
+            ref_impl.validate_translation("Hello", "危險", "English", "Korean"),
+            "wrong_script",
+        )
+        self.assertEqual(
+            ref_impl.validate_translation("Hello", "안녕하세요", "English", "Japanese"),
+            "wrong_script",
+        )
+        self.assertEqual(
+            ref_impl.validate_translation("Hello", "そうですね", "English", "Korean"),
+            "wrong_script",
+        )
+        # Same-language results bypass the target script gate.
+        self.assertEqual(
+            ref_impl.validate_translation("同 ッ", "同 ッ", "Japanese", "Japanese"),
+            "",
+        )
+        # Serbian can legitimately be written in Latin script.
+        self.assertEqual(
+            ref_impl.validate_translation("Hello", "Dobar dan, kako ste?", "English", "sr"),
+            "",
+        )
+
+    def test_likely_chinese_requires_han_evidence(self):
+        self.assertTrue(ref_impl.is_likely_chinese_text("你好，世界"))
+        self.assertTrue(ref_impl.is_likely_chinese_text("這是繁體"))
+        self.assertTrue(ref_impl.is_likely_chinese_text("這個問題"))
+        self.assertFalse(ref_impl.is_likely_chinese_text("Привет, мир"))
+        self.assertFalse(ref_impl.is_likely_chinese_text("こんにちは"))
+        self.assertFalse(ref_impl.is_likely_chinese_text("안녕하세요"))
 
     def test_target_rules(self):
         self.assertIn("全角标点", ref_impl.target_rules("简体中文"))
@@ -1889,10 +2002,22 @@ class TestProbeAndLoginUnit(unittest.TestCase):
         self.assertTrue(ok, msg=req)
         self.assertTrue(req.url.endswith("/v1/models?k=tok"), msg=req.url)
 
-    def test_probe_unsupported_for_custom(self):
-        ok, err = ref_impl.build_probe_request(spec_of("custom|http://h/x|m"), "k")
-        self.assertFalse(ok)
-        self.assertEqual(err.code, "unsupported")
+    def test_probe_custom_derives_models_url(self):
+        ok, req = ref_impl.build_probe_request(
+            spec_of("custom|http://h/v1/chat/completions|m|probe=models;probe_timeout=5000"),
+            "k",
+        )
+        self.assertTrue(ok, msg=req)
+        self.assertEqual(req.url, "http://h/v1/models")
+        self.assertEqual(req.timeout, 5.0)
+
+    def test_probe_custom_strips_query_and_trailing_slash(self):
+        ok, req = ref_impl.build_probe_request(
+            spec_of("custom|http://h/v1/chat/completions/?api-version=1|m|probe=models"),
+            "",
+        )
+        self.assertTrue(ok, msg=req)
+        self.assertEqual(req.url, "http://h/v1/models")
 
     def test_parse_models_response_shapes(self):
         spec = spec_of("openai:mock-model")
@@ -1941,6 +2066,17 @@ class TestProbeAndLoginUnit(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(err.code, "auth_needed")
         self.assertIn("API Key", err.message)
+
+        ok, err = ref_impl.login(
+            "custom|http://h/v1/chat/completions|m|auth=bearer;probe=none", ""
+        )
+        self.assertFalse(ok)
+        self.assertEqual(err.code, "auth_needed")
+
+        ok, msg = ref_impl.login(
+            "custom|http://h/v1/chat/completions|m|auth=none;probe=none", ""
+        )
+        self.assertTrue(ok, msg=msg)
 
         # Ollama 的 /api/chat 必须带 model，登录前就拒绝空模型
         ok, err = ref_impl.login("ollama", "")
@@ -2535,6 +2671,41 @@ class TestMockServerE2E(unittest.TestCase):
         self.assertFalse(ok2)
         self.assertIn(err.code, ("network", "timeout"))
         self.assertTrue(err.message)
+
+    def test_perform_raw_rejects_oversized_response(self):
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b"x" * (ref_impl.MAX_RESPONSE_BYTES + 1)
+
+        ok, spec = ref_impl.parse_spec("openai:mock-model-a")
+        self.assertTrue(ok, msg=spec)
+        ok, req = ref_impl.build_probe_request(spec, "sk-test")
+        self.assertTrue(ok, msg=req)
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse()):
+            ok, err = ref_impl.perform_raw(req)
+        self.assertFalse(ok)
+        self.assertEqual(err.code, "response_too_large")
+
+    def test_login_network_error_masks_query_key(self):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        ok, spec = ref_impl.parse_spec("openai:mock-model-a|auth=query")
+        self.assertTrue(ok, msg=spec)
+        spec = dataclasses.replace(spec, base=f"http://127.0.0.1:{port}/v1")
+        ok2, err = ref_impl.login(spec, "sk-secret", timeout=0.6)
+        self.assertFalse(ok2)
+        self.assertIn(err.code, ("network", "timeout"))
+        self.assertNotIn("sk-secret", err.message)
 
 
 if __name__ == "__main__":

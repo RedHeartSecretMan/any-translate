@@ -118,12 +118,21 @@ bool g_path_found = false;
 bool g_dst_rtl = false;
 string g_last_error = "";
 string g_last_dst = "";
+string g_last_real_src = "";
 string g_force_dst = "";
 string g_think = "";
 string g_pending_log = "";
 string g_http_headers = "";
 string g_last_media = "";
 int MAX_RESPONSE_BYTES = 2097152;
+int LEN_CHAT_COMPLETIONS = 17;
+int LEN_COMPLETIONS = 12;
+int LEN_RESPONSES = 10;
+int g_stat_requests = 0;
+int g_stat_cache_hits = 0;
+int g_stat_cache_misses = 0;
+int g_stat_retries = 0;
+int g_stat_invalid = 0;
 
 // ===========================================================================
 // 服务商预设表
@@ -761,6 +770,32 @@ string ParseGlossaryLine(const string &in raw)
     return src + "\t" + dst;
 }
 
+bool ParseHeaderEntry(const string &in raw, string &outName, string &outValue)
+{
+    string entry = Trimmed(raw);
+    int colon = entry.findFirst(":", 0);
+    if (colon <= 0) return false;
+    outName = Trimmed(entry.Left(colon));
+    outValue = Trimmed(entry.substr(colon + 1));
+    if (outName.empty() || outValue.empty()) return false;
+    if (outName.findFirst("\r", 0) >= 0 || outName.findFirst("\n", 0) >= 0) return false;
+    if (outValue.findFirst("\r", 0) >= 0 || outValue.findFirst("\n", 0) >= 0) return false;
+    return true;
+}
+
+string ValidateHeadersTemplate(const string &in src)
+{
+    if (src.empty()) return "";
+    array<string> entries = SplitStr(src, "|");
+    for (int i = 0; i < entries.size(); i++)
+    {
+        string name = "";
+        string value = "";
+        if (!ParseHeaderEntry(entries[i], name, value)) return "headers 格式错误: " + Trimmed(entries[i]);
+    }
+    return "";
+}
+
 string ParseSpec(const string &in specIn)
 {
     string spec = Trimmed(specIn);
@@ -876,6 +911,9 @@ string ParseSpec(const string &in specIn)
         else if (k == "think") thinkOpt = v;
         else return "未知选项: " + k;
     }
+
+    string headerErr = isCustom ? ValidateHeadersTemplate(headersOpt) : "";
+    if (!headerErr.empty()) return headerErr;
 
     provider = provider.MakeLower();
     int idx = PresetIndex(provider);
@@ -1204,9 +1242,8 @@ string CacheKey(const string &in text)
     return key;
 }
 
-int CacheFind(const string &in text)
+int CacheFindKey(const string &in key)
 {
-    string key = CacheKey(text);
     uint now = HostGetTickCount();
     for (int i = 0; i < g_cache_keys.size(); i++)
     {
@@ -1225,10 +1262,15 @@ int CacheFind(const string &in text)
     return -1;
 }
 
+int CacheFind(const string &in text)
+{
+    return CacheFindKey(CacheKey(text));
+}
+
 void CachePut(const string &in text, const string &in val)
 {
     string key = CacheKey(text);
-    int i = CacheFind(text);
+    int i = CacheFindKey(key);
     if (i >= 0)
     {
         g_cache_vals[i] = val;
@@ -1608,16 +1650,9 @@ string BuildExtraHeaders()
     array<string> entries = SplitStr(g_headers_template, "|");
     for (int i = 0; i < entries.size(); i++)
     {
-        string entry = Trimmed(entries[i]);
-        if (entry.empty()) continue;
-        int colon = entry.findFirst(":", 0);
-        if (colon <= 0) continue;
-        string name = Trimmed(entry.Left(colon));
-        string value = Trimmed(entry.substr(colon + 1));
-        if (name.empty() || value.empty()) continue;
-        // 防止 header/值注入换行。
-        if (name.findFirst("\r", 0) >= 0 || name.findFirst("\n", 0) >= 0) continue;
-        if (value.findFirst("\r", 0) >= 0 || value.findFirst("\n", 0) >= 0) continue;
+        string name = "";
+        string value = "";
+        if (!ParseHeaderEntry(entries[i], name, value)) continue;
         res += name + ": " + value + "\r\n";
     }
     return res;
@@ -1814,21 +1849,18 @@ string ProbeUrl()
         string base = g_base;
         int q = base.findFirst("?", 0);
         if (q >= 0) base = base.Left(q);
+        while (base.length() > 0 && base.Right(1) == "/") base = base.Left(base.length() - 1);
         if (EndsWith(base, "/chat/completions"))
         {
-            base = base.Left(base.length() - 17) + "/models";
+            base = base.Left(base.length() - LEN_CHAT_COMPLETIONS) + "/models";
         }
         else if (EndsWith(base, "/completions"))
         {
-            base = base.Left(base.length() - 12) + "/models";
+            base = base.Left(base.length() - LEN_COMPLETIONS) + "/models";
         }
         else if (EndsWith(base, "/responses"))
         {
-            base = base.Left(base.length() - 10) + "/models";
-        }
-        else if (EndsWith(base, "/v1"))
-        {
-            base = base + "/models";
+            base = base.Left(base.length() - LEN_RESPONSES) + "/models";
         }
         else
         {
@@ -1854,7 +1886,8 @@ string Probe()
     string content = "";
     if (!HttpExchange(url, BuildHeaders(), "", g_probe_timeout_ms, status, content))
     {
-        return "无法连接 " + url + "（检查地址、端口、网络或代理）";
+        if (status == -1) return "模型列表响应过大，请改用 probe=none";
+        return "无法连接 " + SafeUrl(url) + "（检查地址、端口、网络或代理）";
     }
 
     if (status == 401 || status == 403)
@@ -1974,6 +2007,34 @@ void StripTripleQuoteWrapper(string &s)
     }
 }
 
+void StripWrappedQuotePair(string &s)
+{
+    bool stripped = false;
+    if (s.length() >= 2)
+    {
+        string first1 = s.Left(1);
+        string last1 = s.Right(1);
+        if (first1 == "\"" && last1 == "\"")
+        {
+            s = s.substr(1, s.length() - 2);
+            stripped = true;
+        }
+    }
+    if (!stripped && s.length() >= 6)
+    {
+        string first3 = s.Left(3);
+        string last3 = s.Right(3);
+        if ((first3 == "“" && last3 == "”") ||
+            (first3 == "「" && last3 == "」") ||
+            (first3 == "『" && last3 == "』"))
+        {
+            s = s.substr(3, s.length() - 6);
+            stripped = true;
+        }
+    }
+    if (stripped) s = s.Trim();
+}
+
 string CleanTranslation(const string &in raw, bool rtl)
 {
     string s = raw;
@@ -1994,19 +2055,7 @@ string CleanTranslation(const string &in raw, bool rtl)
     s = StripKnownPrefixes(s);
     s = s.Trim();
 
-    if (s.length() >= 2)
-    {
-        string first = s.Left(1);
-        string last = s.Right(1);
-        if ((first == "\"" && last == "\"") ||
-            (first == "“" && last == "”") ||
-            (first == "「" && last == "」") ||
-            (first == "『" && last == "』"))
-        {
-            s = s.substr(1, s.length() - 2);
-            s = s.Trim();
-        }
-    }
+    StripWrappedQuotePair(s);
 
     s = StrReplaceAll(s, "\r\n", "\n");
     s = StrReplaceAll(s, "\r", "\n");
@@ -2028,6 +2077,20 @@ string LangCodeFor(const string &in label)
     int idx = LangIndex(label);
     if (idx < 0) return "";
     return L_CODE[idx];
+}
+
+string NormalizeSourceKey(const string &in src)
+{
+    if (src.empty() || src == "Auto" || src == "自动检测" || src == "UTF8") return "auto";
+    string code = LangCodeFor(src);
+    if (!code.empty()) return code;
+    string lower = src.MakeLower();
+    for (int i = 0; i < L_CODE.size(); i++)
+    {
+        if (L_CODE[i].MakeLower() == lower) return L_CODE[i];
+        if (L_LABEL[i].MakeLower() == lower) return L_CODE[i];
+    }
+    return lower;
 }
 
 bool HasAsciiLower(const string &in s)
@@ -2113,57 +2176,51 @@ bool ChineseVariantMismatch(const string &in result, const string &in dstCode)
 }
 
 // 日文假名/韩文标记：用于避免把日韩字幕误判成"可直接简繁转换的中文"。
-array<string> KANA_MARKERS =
+bool HasUtf8Range3(const string &in s, const string &in lo, const string &in hi)
 {
-    "あ", "い", "う", "え", "お", "か", "き", "く", "け", "こ",
-    "さ", "し", "す", "せ", "そ", "た", "ち", "つ", "て", "と",
-    "な", "に", "ぬ", "ね", "の", "は", "ひ", "ふ", "へ", "ほ",
-    "ま", "み", "む", "め", "も", "や", "ゆ", "よ", "ら", "り",
-    "る", "れ", "ろ", "わ", "を", "ん", "ア", "イ", "ウ", "エ",
-    "オ", "カ", "キ", "ク", "ケ", "コ", "サ", "シ", "ス", "セ",
-    "ソ", "タ", "チ", "ツ", "テ", "ト", "ナ", "ニ", "ヌ", "ネ",
-    "ノ", "ハ", "ヒ", "フ", "ヘ", "ホ", "マ", "ミ", "ム", "メ",
-    "モ", "ヤ", "ユ", "ヨ", "ラ", "リ", "ル", "レ", "ロ", "ワ",
-    "ヲ", "ン", "です", "ます", "した", "して", "から", "まで"
-};
+    for (int i = 0; i + 2 < s.length(); i++)
+    {
+        string ch = s.substr(i, 3);
+        if (ch >= lo && ch <= hi) return true;
+    }
+    return false;
+}
 
-array<string> HANGUL_MARKERS =
-{
-    "이", "가", "는", "을", "를", "의", "에", "한", "다", "고",
-    "서", "지", "아", "어", "나", "너", "우", "리", "그", "저",
-    "것", "수", "있", "없", "하", "니", "요", "습", "니다", "은"
-};
+bool HasKana(const string &in s) { return HasUtf8Range3(s, "\u3040", "\u30FF"); }
+bool HasHangul(const string &in s) { return HasUtf8Range3(s, "\uAC00", "\uD7A3"); }
+bool HasHan(const string &in s) { return HasUtf8Range3(s, "\u4E00", "\u9FFF"); }
 
 bool IsLikelyChineseText(const string &in s)
 {
     if (!HasNonAscii(s)) return false;
-    if (HasAnyLangChar(s, KANA_MARKERS)) return false;
-    if (HasAnyLangChar(s, HANGUL_MARKERS)) return false;
-    return true;
-}
-
-bool IsAutoOrChineseSource(const string &in src)
-{
-    if (src.empty() || src == "Auto" || src == "自动检测" || src == "UTF8") return true;
-    return StartsWith(LangCodeFor(src), "zh");
+    if (HasKana(s) || HasHangul(s)) return false;
+    // 必须有汉字证据，不能把所有非 ASCII 文本都当成中文。
+    if (HasAnyLangChar(s, ZH_SIMP_ONLY)) return true;
+    if (HasAnyLangChar(s, ZH_TRAD_ONLY)) return true;
+    return HasHan(s);
 }
 
 bool IsSpaceOrPunct(const string &in ch)
 {
-    string marks = " .,!?;:'\"-_/\\()[]{}<>…。，、！？；：“”‘’（）《》【】「」『』—–·";
+    string marks = " .,!?;:'\"-_/\\()[]{}<>";
     return marks.findFirst(ch, 0) >= 0;
 }
 
 string SimplifiedForEcho(const string &in s)
 {
-    string res = "";
-    for (int i = 0; i < s.length(); i++)
+    array<string> multi = {"…", "—", "–", "·", "。", "，", "、", "！", "？",
+                            "；", "：", "“", "”", "‘", "’", "（", "）", "《", "》",
+                            "【", "】", "「", "」", "『", "』"};
+    string res = s;
+    for (int m = 0; m < multi.size(); m++) res = StrReplaceAll(res, multi[m], "");
+    string clean = "";
+    for (int i = 0; i < res.length(); i++)
     {
-        string ch = s.substr(i, 1);
+        string ch = res.substr(i, 1);
         if (IsSpaceOrPunct(ch)) continue;
-        res += ch;
+        clean += ch;
     }
-    return res.MakeLower();
+    return clean.MakeLower();
 }
 
 bool LooksLikeLatinSentence(const string &in s)
@@ -2182,22 +2239,32 @@ bool LooksLikeLatinSentence(const string &in s)
 bool HasSentencePunct(const string &in s)
 {
     if (s.empty()) return false;
+    if (s.length() >= 3)
+    {
+        string last3 = s.Right(3);
+        if (last3 == "。" || last3 == "！" || last3 == "？") return true;
+    }
     string last = s.Right(1);
-    return last == "。" || last == "！" || last == "？" || last == "." || last == "!" || last == "?";
+    return last == "." || last == "!" || last == "?";
 }
 
 bool LooksLikeLeadingLabelLeak(const string &in result, const string &in source)
 {
+    int colonWidth = 1;
     int c = result.findFirst(":", 0);
-    if (c < 0) c = result.findFirst("：", 0);
+    if (c < 0)
+    {
+        c = result.findFirst("：", 0);
+        colonWidth = 3;
+    }
     if (c < 1 || c > 20) return false;
     int sc = source.findFirst(":", 0);
     if (sc < 0) sc = source.findFirst("：", 0);
     if (sc >= 1 && sc <= 20) return false;
-    string label = result.Left(c + 1);
-    for (int i = 0; i < g_history_dst.size(); i++)
+    string label = result.Left(c + colonWidth);
+    for (int i = 0; i < g_ctx_dst_sel.size(); i++)
     {
-        if (StartsWith(g_history_dst[i], label)) return true;
+        if (StartsWith(g_ctx_dst_sel[i], label)) return true;
     }
     return false;
 }
@@ -2206,8 +2273,11 @@ bool LooksLikeHistoryLeak(const string &in result, const string &in source)
 {
     if (result.findFirst("【背景信息", 0) >= 0 ||
         result.findFirst("【最近台词", 0) >= 0 ||
+        result.findFirst("【待翻译文本", 0) >= 0 ||
         result.findFirst("- 原文", 0) >= 0 ||
+        result.findFirst("- 译文", 0) >= 0 ||
         result.findFirst("原文：", 0) >= 0 ||
+        result.findFirst("原文:", 0) >= 0 ||
         result.findFirst("译文：", 0) >= 0 ||
         result.findFirst("译文:", 0) >= 0)
     {
@@ -2217,10 +2287,10 @@ bool LooksLikeHistoryLeak(const string &in result, const string &in source)
     // 有些模型会把历史块的“值”抄回来但不带“原文/译文”标签。
     // 只把带句末标点的整句历史译文当作强信号，避免把“樱花小姐”这类
     // 在当前句中正常复用的人名误判成泄漏。
-    for (int i = 0; i < g_history_dst.size(); i++)
+    for (int i = 0; i < g_ctx_dst_sel.size(); i++)
     {
-        string d = g_history_dst[i];
-        string s = g_history_src[i];
+        string d = g_ctx_dst_sel[i];
+        string s = g_ctx_src_sel[i];
         // 当前原文不同却原样返回上一条译文，属于明确的历史串线。
         if (d.length() >= 8 && result == d && source != s) return true;
         if (d.length() >= 8 && HasSentencePunct(d) &&
@@ -2233,6 +2303,27 @@ bool LooksLikeHistoryLeak(const string &in result, const string &in source)
     return false;
 }
 
+array<string> FORBID_KANA = {"zh-CN", "zh-TW", "ko"};
+array<string> FORBID_HANGUL = {"zh-CN", "zh-TW", "ja"};
+array<string> FORBID_HAN = {"ko"};
+
+bool CodeInList(const string &in code, array<string> &in codes)
+{
+    for (int i = 0; i < codes.size(); i++)
+    {
+        if (codes[i] == code) return true;
+    }
+    return false;
+}
+
+bool HasForbiddenTargetScript(const string &in result, const string &in dstCode)
+{
+    if (CodeInList(dstCode, FORBID_KANA) && HasKana(result)) return true;
+    if (CodeInList(dstCode, FORBID_HANGUL) && HasHangul(result)) return true;
+    if (CodeInList(dstCode, FORBID_HAN) && !HasHangul(result) && HasHan(result)) return true;
+    return false;
+}
+
 string ValidateTranslation(const string &in source, const string &in result,
                            const string &in srcLabel, const string &in dstLabel)
 {
@@ -2241,9 +2332,10 @@ string ValidateTranslation(const string &in source, const string &in result,
     // 上下文块使用“原文/译文”行；模型偶尔会把它们一起复述出来。
     if (LooksLikeHistoryLeak(result, source)) return "history_leak";
 
-    string srcCode = LangCodeFor(srcLabel);
     string dstCode = LangCodeFor(dstLabel);
+    string srcCode = LangCodeFor(srcLabel);
     if (!srcCode.empty() && srcCode == dstCode) return "";
+    if (HasForbiddenTargetScript(result, dstCode)) return "wrong_script";
 
     string simSrc = SimplifiedForEcho(source);
     string simDst = SimplifiedForEcho(result);
@@ -2254,12 +2346,23 @@ string ValidateTranslation(const string &in source, const string &in result,
 
     bool needsNonAscii = StartsWith(dstCode, "zh") || dstCode == "ja" || dstCode == "ko" ||
         dstCode == "ar" || dstCode == "he" || dstCode == "fa" || dstCode == "ur" ||
-        dstCode == "ru" || dstCode == "uk" || dstCode == "bg" || dstCode == "sr" ||
+        dstCode == "ru" || dstCode == "uk" || dstCode == "bg" ||
         dstCode == "el" || dstCode == "hi" || dstCode == "bn" || dstCode == "th" ||
         dstCode == "ka" || dstCode == "hy" || dstCode == "km" || dstCode == "lo" ||
         dstCode == "my" || dstCode == "mn";
     if (needsNonAscii && result.length() >= 3 && !HasNonAscii(result) &&
         HasAsciiAlpha(result) && LooksLikeLatinSentence(result))
+    {
+        return "wrong_script";
+    }
+
+    bool needsLatin = false;
+    for (int li = 0; li < LATIN_LANG_CODES.size(); li++)
+    {
+        if (dstCode == LATIN_LANG_CODES[li]) { needsLatin = true; break; }
+    }
+    if (needsLatin && result.length() >= 3 && !HasAsciiAlpha(result) &&
+        (HasHan(result) || HasKana(result) || HasHangul(result)))
     {
         return "wrong_script";
     }
@@ -2338,6 +2441,7 @@ string TestErrorHint()
 {
     int status = g_http_status;
     if (status == 0) return "network unreachable";
+    if (status == -1) return "response too large";
     if (status == 401 || status == 403) return "API key invalid or no permission";
     if (status == 402) return "insufficient balance";
     if (status == 404) return "endpoint or model not found";
@@ -2372,7 +2476,7 @@ bool HttpExchange(const string &in url, const string &in headers, const string &
     HostCloseHTTP(http);
     if (outContent.length() > MAX_RESPONSE_BYTES)
     {
-        outStatus = 0;
+        outStatus = -1;
         outContent = "";
         return false;
     }
@@ -2383,13 +2487,14 @@ bool SendOnce(const string &in url, const string &in headers, const string &in b
               string &out text, int timeoutMs)
 {
     text = "";
+    g_stat_requests++;
 
     int status = 0;
     string content = "";
     if (!HttpExchange(url, headers, body, timeoutMs, status, content))
     {
-        g_http_status = 0;
-        Dbg("network error: " + SafeUrl(url));
+        g_http_status = status;
+        Dbg(status == -1 ? "response too large" : "network error: " + SafeUrl(url));
         return false;
     }
 
@@ -2426,6 +2531,7 @@ string ErrorHint()
 {
     int status = g_http_status;
     if (status == 0) return "网络不可达";
+    if (status == -1) return "响应体过大";
     if (status == 401 || status == 403) return "API Key 无效或无权限";
     if (status == 402) return "余额不足";
     if (status == 404) return "接口地址或模型不存在";
@@ -2507,6 +2613,25 @@ int RetryAfterMs(int fallbackMs)
     return value * 1000;
 }
 
+void ResetStats()
+{
+    g_stat_requests = 0;
+    g_stat_cache_hits = 0;
+    g_stat_cache_misses = 0;
+    g_stat_retries = 0;
+    g_stat_invalid = 0;
+}
+
+void DbgStats()
+{
+    if (!g_debug) return;
+    Dbg("stats: requests=" + formatInt(g_stat_requests) +
+        " cache_hits=" + formatInt(g_stat_cache_hits) +
+        " cache_misses=" + formatInt(g_stat_cache_misses) +
+        " retries=" + formatInt(g_stat_retries) +
+        " invalid=" + formatInt(g_stat_invalid));
+}
+
 // ===========================================================================
 // 翻译主流程
 // ===========================================================================
@@ -2580,11 +2705,24 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
         return "";
     }
 
+    string srcKey = NormalizeSourceKey(SrcLang);
+    string realSrc = srcKey;
+    if (realSrc == "auto" && !g_last_real_src.empty())
+    {
+        realSrc = g_last_real_src;
+    }
+    else if (realSrc != "auto")
+    {
+        g_last_real_src = realSrc;
+    }
+
     // 切换播放文件时清历史，避免上一部视频的台词串到下一部。
     string media = HostGetPlayingFileName();
+    if (media.empty()) media = HostGetPlayingTitle();
     if (!media.empty() && !g_last_media.empty() && media != g_last_media)
     {
         ClearContext();
+        g_last_real_src = "";
         Dbg("context reset after media change");
     }
     if (!media.empty()) g_last_media = media;
@@ -2594,29 +2732,32 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
     if (g_last_tick > uint(0) && (now - g_last_tick) > uint(120000))
     {
         ClearContext();
+        g_last_real_src = "";
         Dbg("context reset after pause");
     }
     g_last_tick = now;
     g_last_dst = dstLabel;
 
-    string ctxKey = g_provider + "|" + g_model + "|" + dstLabel + "|" + g_style + "|" + formatInt(g_context_limit) +
-                    "|" + g_context_mode + "|" + formatInt(g_context_char_limit) + "|" + formatInt(g_glossary_src.size());
+    string ctxKey = g_provider + "|" + g_model + "|" + realSrc + "|" + dstLabel + "|" + g_style +
+                    "|" + formatInt(g_context_limit) + "|" + g_context_mode +
+                    "|" + formatInt(g_context_char_limit) + "|" + formatInt(g_glossary_src.size());
     if (ctxKey != g_context_key)
     {
         ClearContext();
         g_context_key = ctxKey;
     }
 
-    g_cache_scope = "p4|" + g_provider + "|" + g_model + "|" + g_base + "|" + SrcLang + "|" + dstLabel +
+    g_cache_scope = "p4|" + g_provider + "|" + g_model + "|" + g_base + "|" + realSrc + "|" + dstLabel +
                     "|" + g_style + "|" + g_context_mode + "|" + formatInt(g_context_limit) +
                     "|" + formatInt(g_context_char_limit) + "|" + g_path + "|" + g_body_template +
-                    "|" + g_temperature + "|" + g_max_tokens + "|" + g_think + "|" + BuildGlossaryText();
+                    "|" + g_headers_template + "|" + g_extra_body + "|" + g_temperature +
+                    "|" + g_max_tokens + "|" + g_think + "|" + BuildGlossaryText();
     SelectContext();
 
     // 中文简繁转换不需要经过模型：目标简体且原文可判断为中文时直接逐字转换。
     // 这样既避免模型把繁体原样复制，也避免模型擅自改写语义。
     string dstCode = LangCodeFor(dstLabel);
-    if (!selfTest && dstCode == "zh-CN" && IsAutoOrChineseSource(SrcLang) && IsLikelyChineseText(raw))
+    if (!selfTest && dstCode == "zh-CN" && (realSrc == "auto" || StartsWith(realSrc, "zh")) && IsLikelyChineseText(raw))
     {
         string converted = ToSimplified(raw);
         CachePut(raw, converted);
@@ -2630,6 +2771,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
     int hit = CacheFind(raw);
     if (hit >= 0)
     {
+        g_stat_cache_hits++;
         g_fail_count = 0;
         PushHistory(raw, g_cache_vals[hit]);
         SrcLang = "UTF8";
@@ -2637,12 +2779,10 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
         return g_cache_vals[hit];
     }
 
+    g_stat_cache_misses++;
     g_dst_rtl = IsRtlLabel(dstLabel);
     string srcName = "";
-    if (!SrcLang.empty() && SrcLang != "自动检测" && SrcLang != "Auto" && SrcLang != "UTF8")
-    {
-        srcName = ResolvePromptLang(SrcLang);
-    }
+    if (realSrc != "auto") srcName = ResolvePromptLang(realSrc);
     string dstName = ResolvePromptLang(dstLabel);
     string contextMode = EffectiveContextMode();
     string systemText = BuildSystemPrompt(srcName, dstName, dstLabel, contextMode == "turns");
@@ -2677,6 +2817,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
                                                contextMode, true);
         if (minimalBody != lastSentBody)
         {
+            g_stat_retries++;
             ok = SendOnce(url, headers, minimalBody, result, RemainingBudget(startTick));
             lastSentBody = minimalBody;
             requests++;
@@ -2688,6 +2829,22 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
         }
     }
 
+    if (!ok && g_http_status == 413 && RemainingBudget(startTick) > 1200)
+    {
+        Dbg("413: retry without history");
+        string fallbackPrompt = BuildPrompt(raw, srcName, dstName, dstLabel, false);
+        string fallbackBody = BuildBodyPipeline(systemText, "", userText, fallbackPrompt,
+                                                raw, srcName, dstName, g_minimal_body,
+                                                contextMode, false);
+        if (fallbackBody != lastSentBody)
+        {
+            g_stat_retries++;
+            ok = SendOnce(url, headers, fallbackBody, result, RemainingBudget(startTick));
+            lastSentBody = fallbackBody;
+            requests++;
+        }
+    }
+
     if (!ok && g_http_status == 200 && RemainingBudget(startTick) > 1000)
     {
         string minimalBody2 = BuildBodyPipeline(systemText, contextText, userText, prompt,
@@ -2696,6 +2853,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
         if (minimalBody2 != lastSentBody)
         {
             Dbg("empty content, retry minimal body");
+            g_stat_retries++;
             ok = SendOnce(url, headers, minimalBody2, result, RemainingBudget(startTick));
             lastSentBody = minimalBody2;
             requests++;
@@ -2713,7 +2871,21 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
         HostSleep(waitMs);
         if (RemainingBudget(startTick) > 500)
         {
+            g_stat_retries++;
             ok = SendOnce(url, headers, body, result, RemainingBudget(startTick));
+            requests++;
+        }
+    }
+
+    if (!ok && (g_http_status == 0 || g_http_status == 408) &&
+        RemainingBudget(startTick) > 1500)
+    {
+        Dbg("transient network error, retry once");
+        HostSleep(200);
+        if (RemainingBudget(startTick) > 500)
+        {
+            g_stat_retries++;
+            ok = SendOnce(url, headers, lastSentBody, result, RemainingBudget(startTick));
             requests++;
         }
     }
@@ -2742,9 +2914,10 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
             requests++;
         }
 
-        string invalid = ValidateTranslation(raw, result, SrcLang, dstLabel);
+        string invalid = ValidateTranslation(raw, result, realSrc, dstLabel);
         if (!invalid.empty())
         {
+            g_stat_invalid++;
             Dbg("validation failed: " + invalid);
             if (RemainingBudget(startTick) > 1200)
             {
@@ -2764,11 +2937,12 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
                 string strictBody = BuildBodyPipeline(systemText, strictContext, strictUser, strictPrompt,
                                                       raw, srcName, dstName, g_minimal_body,
                                                       contextMode, includeHistory);
+                g_stat_retries++;
                 ok = SendOnce(url, headers, strictBody, result, RemainingBudget(startTick));
                 requests++;
                 if (ok)
                 {
-                    invalid = ValidateTranslation(raw, result, SrcLang, dstLabel);
+                    invalid = ValidateTranslation(raw, result, realSrc, dstLabel);
                 }
             }
             else
@@ -2793,6 +2967,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
             g_fail_count = 0;
             ClearHistory();
         }
+        DbgStats();
         if (selfTest) return "AnyTranslate test failed: " + TestErrorHint();
         return "";
     }
@@ -2801,6 +2976,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
     CachePut(raw, result);
     PushHistory(raw, result);
     Dbg("translate ok in " + formatInt(int(elapsed)) + "ms, requests=" + formatInt(requests));
+    DbgStats();
 
     SrcLang = "UTF8";
     DstLang = "UTF8";
@@ -2859,6 +3035,8 @@ string ServerLogin(string User, string Pass)
     HostSaveString("anytr_spec", spec);
     HostSaveString("anytr_key", g_key);
     ClearContext();
+    g_last_real_src = "";
+    ResetStats();
 
     Dbg("login ok: " + SafeUrl(spec));
     return "200 ok";
@@ -2878,6 +3056,8 @@ void ServerLogout()
     HostSaveString("anytr_key", "");
     HostSaveString("anytr_spec", "");
     ClearContext();
+    g_last_real_src = "";
+    ResetStats();
 }
 
 void OnInitialize()
@@ -2928,4 +3108,3 @@ array<string> GetDstLangs()
     }
     return ret;
 }
-

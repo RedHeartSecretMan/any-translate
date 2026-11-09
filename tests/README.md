@@ -4,8 +4,8 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `test_contract.py` | 215 项契约测试：spec 解析、style/context/deadline、四种协议请求/响应、目标语言规则、非对白过滤、质量门、错误码、登录自检、E2E mock |
-| `test_static.py` | 3 项插件静态检查：括号配平、入口点、`L_*` / `P_*` / `STYLE_*` 表、Host API 签名（与上项合计 224） |
+| `test_contract.py` | 231 项契约测试：spec 解析、style/context/deadline、四种协议请求/响应、目标语言规则、非对白过滤、质量门、错误码、登录自检、E2E mock |
+| `test_static.py` | 3 项插件静态检查：括号配平、入口点、`L_*` / `P_*` / `STYLE_*` 表、Host API 签名（与上项合计 234） |
 | `support/reference_impl.py` | Python 参考实现，逐函数镜像 `.as` |
 | `support/mock_server.py` | 本机 mock LLM 服务，记录请求供断言 |
 | `run_tests.ps1` | 一键运行：py_compile → mock 冒烟 → unittest → 摘要 |

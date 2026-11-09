@@ -19,7 +19,7 @@
 | --- | --- |
 | `tests/support/mock_server.py` | 单进程 mock LLM 服务（仅标准库）；记录请求供断言 |
 | `tests/support/reference_impl.py` | Python 参考实现：`parse_spec` / `build_request` / `parse_response` / `clean_text` / `login` / `probe` 等，**永不抛异常**，统一返回 `(ok, payload\|Err)` |
-| `tests/test_contract.py` | 原生 unittest，**215 个用例**（含 subTest 合计 1100+ 条断言） |
+| `tests/test_contract.py` | 原生 unittest，**231 个用例**（含 subTest 合计 1100+ 条断言） |
 | `tests/run_tests.ps1` | 一键运行：py_compile → 独立 mock 冒烟 → unittest → 摘要 |
 | `docs/testing/contract.md` | 本文件 |
 | `docs/testing/angelscript-validation.md` | AngelScript 校验工具链调研 |
@@ -86,9 +86,11 @@ auth   := bearer | x-api-key | query | none
 - preset 名大小写不敏感；`custom|` 前缀大小写敏感（`.as` 用 `StartsWith`）。
 - opts 容错：缺 `=` / key 为空 / 未知 key 会在登录时报错（`bad_opts`）；
   `temp` 删除非 `[0-9.]` 字符后为空则回退 0.2，`.5`→`0.5`、`1.`→`1`；
-  `max_tokens` 只保留数字，为空则不发送；`debug` / `minimal` 仅 `1` 或 `true` 为真；
+  `max_tokens` 只保留数字，为空则不发送；`debug` 为 `1`/`true` 或 `2` 时启用，`2` 额外输出正文；`minimal` 仅 `1`/`true` 为真；
   `version` 原样透传；`contextitems` 只取数字并夹到 0..32；`style` 默认 `movie`；
   `deadline` 只取数字并夹到 2000..20000，默认 6000。
+- `probe_timeout` 只影响登录自检，默认 10000 ms，夹到 1000..60000；
+  `headers` 只对 custom 生效，格式 `Header:Value|Header2:Value2`，格式错误报 `bad_opts`。
 - 非法值报错（与 `.as` 文案一致）：未知服务商、custom 缺 URL、auth 取值非法、
   style 不在 `movie/tv/anime/doc/tech/formal/casual` 内。
 
@@ -211,7 +213,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 
 ### 3.7 登录自检（`ServerLogin` + `Probe`）
 
-- `probe` 默认：预设 `models`，custom `none`；`probe=none` 或 custom 不探测。
+- `probe` 默认：预设 `models`，custom `none`；`probe=none` 跳过探测；custom 显式 `probe=models` 时派生 `/models` 并探测。
 - 探测 URL：openai `{base}/models`、ollama `{base}/api/tags`、
   anthropic `{base}/v1/models`、gemini `{base}/v1beta/models`
   （`auth=query` 时与翻译共用 `AppendQueryAuth`，URL 追加 `?key=<key>`，
@@ -224,9 +226,9 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 - 模型匹配：大小写不敏感；允许 `model -> model:tag` 前缀匹配
   （如 `qwen3` 匹配 `qwen3:4b`）；不匹配时提示
   “未找到模型: X；可用示例: …”。
-- 登录前置校验：非 none 认证且非 custom 时 Key 必填；anthropic/gemini/ollama
+- 登录前置校验：非 none 认证时 Key 必填（custom 也不例外）；anthropic/gemini/ollama
   必须有模型名（anthropic/gemini 由预设默认模型保证非空，ollama 必须显式
-  `ollama:<model>`）；custom 允许无 Key。
+  `ollama:<model>`）。
 
 ## 4. JSON 转义与日志脱敏（`.as` 对齐）
 
@@ -269,9 +271,13 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 | E-07 | 请求体厂商扩展字段 | `P_EXTRA` 的 deepseek/qwen/siliconflow 关思考字段 + Gemini generationConfig | ✅ resolved |
 | E-08 | 额外请求头 | 所有请求（含 probe）统一带 `Accept: application/json` | ✅ resolved |
 | E-09 | opts 扩展 | 任意 spec 支持 opts（竖线分隔）；新增 `max_tokens`/`version`/`minimal`；body 占位符 `{{prompt}}{{text}}{{model}}{{src}}{{dst}}` | ✅ resolved |
-| E-10 | 登录自检 | probe 默认、404/405 放行、Key 必填、模型名匹配、custom 不探测 | ✅ resolved |
-| E-11 | 重试策略 | `.as` 的 400/空响应/429/5xx/质量重试都受单条 `deadline` 预算约束；单请求 mock 无法断言次数，测试不覆盖。质量门判定由 `validate_translation` 单测覆盖 | ⏳ out of scope（次数） |
+| E-10 | 登录自检 | probe 默认、404/405 放行、Key 必填、模型名匹配、custom 显式 probe=models 时探测；`probe_timeout` 默认 10 s | ✅ resolved |
+| E-11 | 重试策略 | `.as` 的 400/413/空响应/408/网络/429/5xx/质量重试都受单条 `deadline` 预算约束；单请求 mock 无法断言次数，测试不覆盖。质量门判定由 `validate_translation` 单测覆盖 | ⏳ out of scope（次数） |
 | E-12 | clean_text 细节 | 前缀表/去包裹引号/换行压缩/`<br>` 均按 `.as` 对齐 | ✅ resolved |
+| E-20 | 响应过大 | 响应体 >2 MB 映射为 `response_too_large`，运行期静默 | ✅ resolved |
+| E-21 | 源语言归一化 | `English`/`en` 同一 source key；`UTF8`/Auto 沿用上次真实源语言；真实源语言变化清上下文 | ✅ resolved |
+| E-22 | 目标脚本策略 | 中文目标拒绝明显日文/韩文；日文目标拒绝韩文；韩文目标拒绝日文/纯汉字；`sr` 允许拉丁/西里尔 | ✅ resolved |
+| E-23 | 降级补充 | 413 尝试无上下文；网络错误/408 在 deadline 内短重试一次 | ✅ resolved |
 | E-13 | 错误呈现方式 | ref 用稳定错误码 + `Err.detail` 供断言；`.as` 返回空串 + `ErrorHint` Dbg，不向字幕混入错误文案（DESIGN §4） | 📌 interface difference |
 | E-14 | lmstudio/vllm/sglang 认证 | auth=none，无需 Key（`P_AUTH`） | ✅ resolved |
 | E-15 | 默认 probe | 预设 `models`、custom `none`（DESIGN §5.2） | ✅ resolved |
@@ -309,7 +315,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 | D-23 | 登录持久化 | `ServerLogin` 空 spec/空 Key 沿用保存值；ref 纯函数用默认值，持久化不测 | out of scope |
 | D-24 | 模板 JSON 校验 | ref 额外校验（E-16） | ref stricter |
 | D-25 | 模型匹配 | 忽略大小写；`want:tag` 前缀匹配（`.as ModelMatched`） | aligned |
-| D-26 | 探测请求头 | 复用 BuildHeaders（Content-Type/Accept/认证头）；`auth=query` 时 probe 与翻译共用 AppendQueryAuth（URL 带 `?key=`、无认证头） | aligned |
+| D-26 | 探测请求头 | 复用 BuildHeaders（Content-Type/Accept/认证头；custom `headers=` 追加）；`auth=query` 时 probe 与翻译共用 AppendQueryAuth（URL 带 `?key=`、无认证头） | aligned |
 | D-27 | auth=query 参数名 | 未显式 `keyname=` 时归一化为 `key`（P1 修复）；显式 keyname 优先 | aligned |
 | D-28 | SafeUrl 脱敏 | 先替换 `HostUrlEncode(key)` 再替换原始 key（两种形式都变 `****`） | aligned |
 | D-29 | MaskKey 阈值 | 长度 <16 → `****`；≥16 才显示前4/后4 | aligned |
@@ -357,7 +363,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 10. **模型列表/登录**：`build_probe_request`/`parse_models_response`/
     `model_matched`/`login` ↔ `ProbeUrl`/`Probe`/`ParseModels`/`ModelMatched`/
     `ServerLogin`；对照 `TestProbeAndLoginUnit` + `TestMockServerE2E` 登录用例
-    （404/405 放行、401/429/500 文案、大小写、ollama tag 前缀、custom 不探测、
+    （404/405 放行、401/429/500 文案、大小写、ollama tag 前缀、custom 显式 probe=models、
     `auth=query` 时 probe URL 带 `?key=` 且无认证头）。
 11. **脱敏**：`safe_url`/`mask_key`/`host_url_encode` ↔ `SafeUrl`/`MaskKey`/`HostUrlEncode`；
     `test_safe_url_masks_encoded_and_raw_key`、`test_mask_key`（9/15/16 位边界）。
@@ -405,8 +411,4 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 
 最后更新：2026-11-07（0.1.0：style/contextitems/deadline、目标语言规则、译文质量门、
 非对白过滤；同时回归 SafeUrl 编码脱敏 / auth=query 归一化 / MaskKey <16 /
-ErrorHint 404 / JsonEscape 剔除 C0；224 用例全部通过，`run_tests.ps1` 一键 PASS）。
-
-
-
-
+ErrorHint 404 / JsonEscape 剔除 C0；234 用例全部通过，`run_tests.ps1` 一键 PASS）。

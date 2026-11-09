@@ -29,7 +29,7 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 | 错误呈现 | 登录期中文提示，运行期静默返回空串 | 避免把错误文案混进字幕；诊断信息走 `debug=1` 控制台 |
 | 输出清理 | 去 Markdown 围栏、`'''` / `"""` 包裹、常见前缀与首尾引号 | 兼容会加格式围栏的翻译模型，避免符号进入字幕 |
 | 中文简繁 | 目标 `zh-CN` 且原文可判断为中文时直接逐字转换；模型输出再用字体校验兜底 | 避免模型保留繁体字或为做字形转换擅自改写语义 |
-| 上下文隔离 | 校验输出是否复述“- 原文/译文”历史块；命中后用无上下文提示词重试 | 防止模型把仅供理解语境的最近台词带进字幕 |
+| 上下文隔离 | 校验输出是否复述历史块或提示词标签（`- 原文`、`- 译文`、`原文:`、`原文：`、`译文:`、`译文：`、`【背景信息】`、`【待翻译文本】`）；命中后用无上下文提示词重试 | 防止模型把仅供理解语境的最近台词带进字幕 |
 | 失败降级 | 400 参数类 → 最小体并记忆；200 空 → 重试；全部受单条 `deadline` 约束 | 兼容推理模型对参数的限制，同时避免拖住后续字幕 |
 | 配置持久化 | `HostSaveString`（PotPlayer 脚本存储） | 与插件接口一致；不额外引入文件 |
 | 提示词 | system 任务/硬规则 + 风格/语言；user 背景/术语/当前文本 | 参考 Index-Translate / Hy-MT2 分段模板，边界清楚且 token 可控 |
@@ -43,10 +43,11 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 
 | API | 用途 | 依据 |
 | --- | --- | --- |
-| `HostOpenHTTP` / `HostGetContentHTTP` / `HostGetStatusHTTP` / `HostCloseHTTP` | 同步 HTTP(S)，可拿到状态码与响应体 | api.txt:107-123；`PotPlayer64.dll` 中签名 `uintptr HostOpenHTTP(...)`、`int HostGetStatusHTTP(uintptr)`；官方 `LM Studio.as` 已在用 `HostOpenHTTP` |
-| `HostIncTimeOut` | 单次请求的脚本超时预算（翻译按 `deadline`，登录自检 20 s） | api.txt:42；签名 `void HostIncTimeOut(int)` |
+| `HostOpenHTTP` / `HostGetContentHTTP` / `HostGetStatusHTTP` / `HostGetHeaderHTTP` / `HostCloseHTTP` | 同步 HTTP(S)，可拿到状态码、响应体与响应头（`Retry-After`） | api.txt:107-123；`PotPlayer64.dll` 中签名 `uintptr HostOpenHTTP(...)`、`int HostGetStatusHTTP(uintptr)`；官方 `LM Studio.as` 已在用 `HostOpenHTTP` |
+| `HostIncTimeOut` | 单次请求的脚本超时预算（翻译按 `deadline`，登录自检按 `probe_timeout`，默认 10 s） | api.txt:42；签名 `void HostIncTimeOut(int)` |
 | `HostLoadString` / `HostSaveString` | 持久化配置（spec、Key） | api.txt:222-226；`bool HostSaveString(const string &in, const string &in)` |
 | `HostGetTickCount` | 检测长时间暂停，重置上下文 | api.txt:39；`uint HostGetTickCount()` |
+| `HostGetPlayingFileName` / `HostGetPlayingTitle` | 检测播放文件切换，清理上下文和缓存；文件名不可用时用标题兜底 | api.txt:316/319；`string HostGetPlayingFileName()`、`string HostGetPlayingTitle()` |
 | `HostOpenConsole` / `HostPrintUTF8` | `debug=1` 时输出诊断日志（Key 脱敏） | api.txt:15-22 |
 | `HostUrlEncode` | `SafeUrl` 脱敏时同时匹配 URL 编码后的 Key | api.txt 随扩展包分发 |
 | `HostRegExpRemove` | 清理 C0 控制字符、清洗数值参数 | api.txt 随扩展包分发 |
@@ -192,9 +193,9 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 默认 `movie`。模板内容必须让模型"感觉像同一部片子的字幕"，而不是解释剧情。
 
 `contextitems` 控制 `g_history_src` / `g_history_dst` 的窗口：成功翻译后成对入栈，
-prompt 同时给出最近 N 组原文与译文；`0` 关闭。窗口上限 8，调小只影响下一次
-prompt，调大不会复活已丢弃的历史。`style`/`contextitems` 或 provider/model/dst
-变化会清空上下文与缓存，避免跨风格污染。
+prompt 同时给出最近 N 组原文与译文；`0` 关闭。窗口上限 32，调小只影响下一次
+prompt，调大不会复活已丢弃的历史。`style`/`contextitems`、provider/model/dst
+或真实源语言变化会清空上下文与缓存，避免跨风格或跨语言污染。
 
 `deadline` 是单条字幕总预算：首次请求与后续降级/质量重试共享这一预算，
 剩余预算不足时不再发起重试，避免拖住后续字幕。纯符号/数字/音乐符号行
@@ -269,25 +270,28 @@ JSON 字符串一律经 `JsonEscape`：先剔除 JSON 不允许的 C0 控制字�
 | 场景 | 行为 |
 | --- | --- |
 | HTTP 句柄为 0 | 返回空串，`debug=1` 时打印"网络不可达" |
+| 响应体超过 2 MB | 视为 `response too large`，运行期静默，测试按钮显示响应过大；不进入 JSON 解析 |
 | 401 / 402 / 403 | 登录期返回对应中文提示；运行期静默 |
 | 404 / 405（登录自检） | 视为该服务未实现模型列表，跳过校验并放行登录 |
 | 429 / 5xx | 预算内重试 1 次，优先使用 `Retry-After`，否则 400/600ms 退避；仍失败则静默 |
+| 413 请求体过大 | 预算内去掉历史上下文重试 1 次；仍失败则静默 |
+| 网络错误 / 408 | 剩余预算 >1500 ms 时短退避后重试 1 次；仍失败则静默 |
 | 400 且错误文本提示参数不支持 | 预算内用最小体（仅 model + messages + stream:false）重试 1 次；成功后本次会话固定用最小体。错误文本为空或不含参数关键词时不降级 |
 | 200 但译文为空 | 预算内用最小体重试 1 次（常见于思考内容占满预算）；若最小体与当前体相同则跳过 |
-| 译文回显原文 / 目标文字脚本缺失 / 严重超长 | 预算内用更强硬提示词重试 1 次；仍不合格则本次返回空串，不写缓存 |
+| 译文回显原文 / 目标文字脚本缺失 / 中英日韩明显串脚本 / 严重超长 | 预算内用更强硬提示词重试 1 次；仍不合格则本次返回空串，不写缓存 |
 | 剩余预算不足 | 不再发起降级/重试；直接按当前失败结果处理，避免阻塞下一条字幕 |
 | JSON 解析失败 / 路径不存在 / 译文为空（HTTP 200） | 用最小体重试 1 次；仍失败则静默返回空串 |
 | 连续失败 ≥ 5 次 | 清空上下文（保留缓存），避免污染后续翻译 |
 | 登录自检失败 | 置运行期"已登出"状态，`Translate` 直接返回空串，避免用未验证配置逐行请求；测试按钮显示未登录提示 |
 
 超时：翻译每次请求前按剩余预算调用 `HostIncTimeOut`，单条字幕总预算默认 6 s；
-登录自检固定 20 s。单行通常 1-3 次请求，质量重试最多再加 1 次，且必须仍在预算内。
+登录自检默认 10 s（`probe_timeout=1000..60000`）。单行通常 1-3 次请求，质量重试最多再加 1 次，且必须仍在预算内。
 Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预热或调高 `deadline`。
 
 ## 8. 性能与成本
 
 - **上下文窗口**：保留最近 16 组原文+译文（`contextitems=0..32`），按 UTF-8 字节预算截断，作为"仅供参考、禁止翻译"的语境块；
-- **缓存**：最近 64 条（原文 → 译文）线性缓存，命中直接返回，避免重复计费；
+- **缓存**：最近 64 条，按 provider/model/目标/风格/上下文指纹及 custom `headers`/扩展字段区分，LRU + 10 分钟 TTL；同上下文下的重复台词命中后直接返回；
 - **暂停重置**：距上次翻译超过 120 秒清空上下文与缓存；
 - **实时预算**：单条字幕默认 6 s（`deadline=2000..20000`），预算内才继续重试；
 - **非对白**：纯符号/数字/音乐行本地原样返回，不产生请求；
@@ -330,23 +334,18 @@ Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预
 6. 自定义 API 只支持 JSON 请求/响应；表单编码类接口（如 DeepL 表单版）
    不在支持范围，请使用官方插件；
 7. `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`，无转义机制；
-8. 质量门是本地启发式：目标语言为拉丁字母时只能查回显/超长，无法可靠识别
-   "答成另一种拉丁语言"；CJK/阿拉伯/西里尔等脚本只把"明显是拉丁语句"的整句
+8. 质量门是本地启发式：拉丁目标能识别“明显返回 CJK”的情况，但不能可靠区分
+   “答成另一种拉丁语言”；CJK/阿拉伯/西里尔等脚本只把“明显是拉丁语句”的整句
    判错（缩写、短专名放行），不区分简繁或具体语种；
 9. 非对白判断只覆盖纯数字/ASCII 标点/常见音乐符号；emoji 或复杂符号仍可能
    触发一次请求；
-10. `deadline` 限制的是重试与脚本超时预算，不能取消已经发出的同步 HTTP 请求；
+10. 源语言来自宿主；插件的 `NormalizeSourceKey` 只做代码/标签归一，不自动识别源语言；
+11. 目标脚本策略只覆盖中文/日文/韩文的明显串脚本问题，不宣称完整脚本检测；
+12. 413 降级会去掉上下文后重试一次；网络错误/408 只在 deadline 剩余时短重试一次；
+13. `deadline` 限制的是重试与脚本超时预算，不能取消已经发出的同步 HTTP 请求；
     首次请求本身仍可能接近 `deadline` 才返回。
 
 ## 12. 文案与命名约定
 
 服务商显示名、场景标签（如 `Ollama（本机）`）、术语（API Key、配置串、请求地址）、
 标点与中英空格规则统一写在 `docs/style.md`，由 review 对照。
-
-
-
-
-
-
-
-

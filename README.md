@@ -44,14 +44,14 @@ any-translate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译
 | 17 个预设 + custom | 换服务商/模型只改登录框里的一行配置 |
 | 上下文翻译 | 默认保留最近 16 组原文+译文作为语境，`contextitems=0..32` 可调，提升指代、术语与语气一致性 |
 | 场景风格 | `style=movie/tv/anime/doc/tech/formal/casual`，按题材切换提示词模板 |
-| 译文质量门 | 回显原文、目标文字脚本、繁简不匹配、超长译文会被拦截并重试一次，失败宁可不显示 |
+| 译文质量门 | 回显原文、目标文字脚本、繁简不匹配、超长译文会被拦截并重试一次，失败宁可不显示；中文目标会额外拒绝明显日文/韩文 |
 | 中文简繁 | 目标简体且原文是中文时直接逐字转换，避免模型保留繁体或改写语义 |
-| 实时预算 | 单条字幕默认 6 s 总预算，预算内才继续降级/质量重试；`deadline=2000..20000` 可调 |
+| 实时预算 | 单条字幕默认 6 s 总预算，预算内才继续降级/质量重试；`deadline=2000..20000` 可调；413 会尝试无上下文降级 |
 | 非对白过滤 | 纯符号、纯数字、音乐符号行不请求 API，原样返回 |
 | 缓存去重 | 相同台词命中缓存（最近 64 条），避免重复请求与计费 |
 | 登录自检 | 按协议探测模型列表，校验 Key 与模型名，失败给出可操作提示 |
 | 自动降级 | 服务端拒绝 `temperature` / `max_tokens` 时改用最小请求体并记住 |
-| 诊断模式 | `debug=1` 打开脚本控制台，查看状态码、耗时与脱敏后的响应 |
+| 诊断模式 | `debug=1` 查看状态码、长度与耗时摘要；`debug=2` 才输出请求/响应正文 |
 | 82 种语言 | 插件返回语言代码，菜单名称由 PotPlayer 本地化显示；提示词映射为双语语言名 |
 | 上下文流水线 | 默认 `split`；规则进 system，背景信息/待翻译文本分离；支持 `block`/`turns` 切换 |
 | 隐私默认 | 无遥测；Key 由 PotPlayer 的 `HostSaveString` 保存在本机（非加密） |
@@ -145,8 +145,9 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 - `custom` 的 `endpoint_url` 是完整请求地址，不再追加协议路径。
 - `opts` 用 `;` 分隔、`=` 赋值；可用：`path`、`auth`、`keyname`、`body`、`headers`、`temp`、`max_tokens`、`minimal`、`version`、`probe`、`probe_timeout`、`debug`、`style`、`contextitems`、`contextmode`、`contextchars`、`glossary`、`deadline`、`dst`、`think`。
 - 未知 key、缺 `=` 或空 key 会在登录时报错，不再静默忽略；拼错配置会直接显示 `未知选项: ...`。
+- 旧版 `context=` 已移除，请改为 `contextitems=`；旧配置不会自动迁移，登录会明确报未知选项。
 - `body` 值不能含 `;`；custom 的 URL / model / body 不能含 `|`（没有转义机制）。
-- `headers` 仅对 custom 生效，格式为 `Header:Value|Header2:Value2`；Header 值不能含 `;`，也不能用 `|` 表示多个头。
+- `headers` 仅对 custom 生效，格式为 `Header:Value|Header2:Value2`；`|` 分隔多个头，单个 Header 值不能含 `|` 或 `;`。
 - `auth=query` 会把 Key 拼进 URL（参数名 `keyname`，默认 `key`）；能走请求头就别用 query，Key 会出现在代理/网关日志里。`auth=query` 只对支持 URL 鉴权的服务有意义（Gemini、部分自定义网关）；OpenAI / Anthropic 官方接口不接受 query 鉴权，会以 401 明确失败。
 - 密码框留空时沿用上次保存的 Key；用户框留空时沿用上次保存的 spec。
 
@@ -364,7 +365,7 @@ AngelScript 无法在本机直接执行，本项目按三层可复跑验证（�
 # 1. 静态检查：括号配平、入口点、语言表/预设表长度、Host API 是否真实存在
 python -m unittest tests.test_static -v
 
-# 2. 契约测试：py_compile + mock 冒烟 + unittest（224 用例，含静态检查）
+# 2. 契约测试：py_compile + mock 冒烟 + unittest（234 用例，含静态检查）
 powershell -ExecutionPolicy Bypass -File tests\run_tests.ps1
 # PATH 中没有 python 时加 -Python <path>
 
@@ -383,9 +384,3 @@ powershell -ExecutionPolicy Bypass -File tests\run_tests.ps1
 ## 许可
 
 [MIT](LICENSE) 版权所有 (c) 2026 RedHeartSecretMan
-
-
-
-
-
-

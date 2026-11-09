@@ -56,7 +56,8 @@ DEFAULT_ANTHROPIC_MAX_TOKENS = 1024
 DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_TIMEOUT = 30.0
 
-PROBE_TIMEOUT = 20.0  # .as Probe(): HostIncTimeOut(20000)
+PROBE_TIMEOUT = 10.0  # .as Probe(): probe_timeout 默认 10000 ms
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 SEND_TIMEOUT = 6.0  # .as Translate(): default per-cue deadline (6000 ms)
 
 KIND_OPENAI = "openai"
@@ -64,6 +65,12 @@ KIND_ANTHROPIC = "anthropic"
 KIND_GEMINI = "gemini"
 KIND_OLLAMA = "ollama"
 KIND_CUSTOM = "custom"
+
+LATIN_CODES = (
+    "en", "fr", "de", "es", "it", "pt", "nl", "pl", "tr", "vi", "id", "ms",
+    "ro", "cs", "sk", "hu", "hr", "sl", "et", "lv", "lt", "fi", "sv", "da",
+    "no", "is", "ca", "gl", "eu", "af", "sw",
+)
 
 AUTH_MODES = ("bearer", "x-api-key", "query", "none")
 PROBE_MODES = ("models", "none")
@@ -607,6 +614,30 @@ def _parse_preset_spec(spec: str) -> Tuple[bool, Any]:
     )
 
 
+def parse_header_entry(value: Any) -> Any:
+    """解析单个 Header:Value；非法返回 None。"""
+    entry = "" if value is None else str(value).strip()
+    name, sep, val = entry.partition(":")
+    name = name.strip()
+    val = val.strip()
+    if not sep or not name or not val:
+        return None
+    if "\r" in name or "\n" in name or "\r" in val or "\n" in val:
+        return None
+    return name, val
+
+
+def validate_headers_template(value: Any) -> str:
+    """镜像 .as ValidateHeadersTemplate；返回空串表示通过。"""
+    raw = "" if value is None else str(value)
+    if not raw:
+        return ""
+    for entry in raw.split("|"):
+        if parse_header_entry(entry) is None:
+            return f"headers 格式错误: {entry.strip()}"
+    return ""
+
+
 def _finish_spec(
     provider: str,
     base: str,
@@ -692,6 +723,10 @@ def _finish_spec(
     context_chars = _parse_context_chars(opts.get("contextchars"))
     glossary = _parse_glossary(opts.get("glossary"))
     headers = (opts.get("headers") or "").strip()
+    if is_custom:
+        header_error = validate_headers_template(headers)
+        if header_error:
+            return False, _err("bad_opts", header_error)
     debug_raw = (opts.get("debug") or "").strip().lower()
     extra_body: Dict[str, Any] = {} if (is_custom or provider == "custom") else dict(preset.extra_body)
 
@@ -852,7 +887,7 @@ def build_url(spec: Spec, key: str = "") -> str:
 
 
 def build_headers(spec: Spec, key: str = "") -> Dict[str, str]:
-    """镜像 .as BuildHeaders（Content-Type + Accept + 认证头）。"""
+    """镜像 .as BuildHeaders（Content-Type + Accept + 认证头 + custom headers）。"""
     headers: Dict[str, str] = {
         "Content-Type": "application/json",
         "Accept": "application/json",
@@ -863,6 +898,13 @@ def build_headers(spec: Spec, key: str = "") -> Dict[str, str]:
         headers[spec.keyname or "x-api-key"] = key
         if spec.kind == KIND_ANTHROPIC:
             headers["anthropic-version"] = spec.version
+    if spec.preset == "custom" and spec.headers:
+        for entry in spec.headers.split("|"):
+            parsed = parse_header_entry(entry)
+            if parsed is None:
+                continue
+            name, value = parsed
+            headers[name] = value
     return headers
 
 
@@ -1001,23 +1043,28 @@ def build_request(
         return False, _err("internal_error", f"构造请求时发生内部错误：{exc!r}")
 
 
-def build_probe_request(
-    spec: Any, key: Any = "", timeout: float = PROBE_TIMEOUT
-) -> Tuple[bool, Any]:
-    """镜像 .as ProbeUrl + AppendQueryAuth + BuildHeaders：登录自检用 GET 请求。
+def _custom_probe_url(endpoint: str) -> str:
+    base = (endpoint or "").split("?", 1)[0].rstrip("/")
+    for suffix in ("/chat/completions", "/completions", "/responses"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base + "/models"
 
-    ``auth=query`` 时与翻译请求共用 ``AppendQueryAuth``：探测 URL 同样带
-    ``?<keyname>=<urlencoded key>``，且不带任何认证头。
-    """
+
+def build_probe_request(
+    spec: Any, key: Any = "", timeout: Any = None
+) -> Tuple[bool, Any]:
+    """镜像 .as ProbeUrl + AppendQueryAuth + BuildHeaders：登录自检用 GET 请求。"""
     try:
         if isinstance(spec, Err):
             return False, spec
         if not isinstance(spec, Spec):
             return False, _err("config_error", "内部错误：spec 不是有效配置")
-        if spec.preset == "custom":
-            return False, _err("unsupported", "custom 预设不支持 probe=models（响应格式不固定）")
         key_text = "" if key is None else str(key).strip()
-        if spec.kind == KIND_OPENAI:
+        if spec.preset == "custom":
+            url = _custom_probe_url(spec.url)
+        elif spec.kind == KIND_OPENAI:
             url = spec.base + "/models"
         elif spec.kind == KIND_OLLAMA:
             url = spec.base + "/api/tags"
@@ -1031,12 +1078,13 @@ def build_probe_request(
         if spec.auth == "query" and key_text:
             sep = "?" if "?" not in url else "&"
             url = url + sep + spec.keyname + "=" + urllib.parse.quote(key_text, safe="")
+        effective_timeout = (spec.probe_timeout / 1000.0) if timeout is None else float(timeout)
         return True, Request(
             method="GET",
             url=url,
             headers=build_headers(spec, key_text),
             body="",
-            timeout=float(timeout) if timeout else PROBE_TIMEOUT,
+            timeout=effective_timeout if effective_timeout else PROBE_TIMEOUT,
             spec=spec,
             kind=spec.kind,
         )
@@ -1070,12 +1118,16 @@ def perform_raw(req: Any) -> Tuple[bool, Any]:
             with urllib.request.urlopen(http_request, timeout=timeout) as response:
                 status = getattr(response, "status", None) or response.getcode()
                 raw = response.read()
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    return False, _err("response_too_large", "响应体过大（超过 2 MB）")
         except urllib.error.HTTPError as exc:  # 4xx/5xx：urllib 会抛异常，这里转成状态码
             status = exc.code
             try:
                 raw = exc.read()
             except Exception:  # pragma: no cover
                 raw = b""
+            if len(raw) > MAX_RESPONSE_BYTES:
+                return False, _err("response_too_large", "响应体过大（超过 2 MB）")
         return True, (int(status), _decode_body(raw))
     except (TimeoutError, socket.timeout):
         return False, _err(
@@ -1525,14 +1577,13 @@ def _login_status_error(spec: Spec, status: int, raw: str) -> Err:
 def login(
     spec_input: Any = None,
     key: Any = "",
-    timeout: float = PROBE_TIMEOUT,
+    timeout: Any = None,
 ) -> Tuple[bool, Any]:
     """镜像 .as ServerLogin + Probe（登录自检）。
 
     返回 ``(True, "200 ok")`` 或 ``(False, Err)``。
-    关键规则：``probe=none`` / ``custom`` 不探测；探测遇到 **HTTP 404/405**
-    视为该服务没有模型列表接口，**跳过校验放行**；模型名匹配忽略大小写，
-    并允许 ``model -> model:tag`` 前缀匹配（见 contract.md D-25）。
+    关键规则：``probe=none`` 不探测；custom 显式 ``probe=models`` 时派生
+    ``/models``；探测遇到 **HTTP 404/405** 跳过校验放行。
     """
     try:
         if isinstance(spec_input, Spec):
@@ -1542,7 +1593,7 @@ def login(
         if not ok:
             return False, spec
         key_text = "" if key is None else str(key).strip()
-        if spec.auth != "none" and not key_text and spec.preset != "custom":
+        if spec.auth != "none" and not key_text:
             return False, _err(
                 "auth_needed", "请在密码框填写 API Key（本机服务可把 auth 设为 none）"
             )
@@ -1550,7 +1601,7 @@ def login(
             return False, _err(
                 "config_error", f"该服务必须指定模型名，例如 {spec.preset}:<model>"
             )
-        if spec.probe == "none" or spec.preset == "custom":
+        if spec.probe == "none":
             return True, "200 ok"
 
         ok, req = build_probe_request(spec, key_text, timeout=timeout)
@@ -1559,9 +1610,10 @@ def login(
         ok, result = perform_raw(req)
         if not ok:
             if result.code == "network":
+                probe_url = getattr(req, "url", spec.base or spec.url)
                 return False, _err(
                     "network",
-                    f"无法连接 {spec.base or spec.url}（检查地址、端口、网络或代理）",
+                    f"无法连接 {safe_url(probe_url, key_text)}（检查地址、端口、网络或代理）",
                     detail=result.detail,
                 )
             return False, result
@@ -1699,6 +1751,24 @@ def lang_code(label: Any) -> str:
         return ""
     if value.startswith("zh") or "chinese" in value or "中文" in value:
         return "zh"
+    if value in ("en", "english", "英语", "英文"):
+        return "en"
+    if value in ("fr", "french", "法语", "法文"):
+        return "fr"
+    if value in ("de", "german", "德语", "德文"):
+        return "de"
+    if value in ("es", "spanish", "西班牙语"):
+        return "es"
+    if value in ("it", "italian", "意大利语"):
+        return "it"
+    if value in ("pt", "portuguese", "葡萄牙语"):
+        return "pt"
+    if value in ("ru", "russian", "俄语"):
+        return "ru"
+    if value in ("sr", "serbian", "塞尔维亚语"):
+        return "sr"
+    if value in LATIN_CODES:
+        return value
     if value in ("ja", "japanese", "日语", "日文", "日本語"):
         return "ja"
     if value in ("ko", "korean", "韩语", "韓語", "한국어"):
@@ -1712,6 +1782,23 @@ def lang_code(label: Any) -> str:
     if value == "ur" or "urdu" in value or "乌尔都" in value or "اردو" in value:
         return "ur"
     return ""
+
+
+def has_han(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def normalize_source_key(source: Any) -> str:
+    """镜像 .as NormalizeSourceKey：代码/标签归一为代码，Auto/UTF8 归一为 auto。"""
+    value = "" if source is None else str(source).strip()
+    if not value or value in ("Auto", "自动检测", "UTF8"):
+        return "auto"
+    if value.lower() in ("zh-cn", "zh_cn", "简体中文", "simplified chinese"):
+        return "zh-CN"
+    if value.lower() in ("zh-tw", "zh_tw", "繁體中文", "traditional chinese"):
+        return "zh-TW"
+    code = lang_code(value)
+    return code if code else value.lower()
 
 
 def has_ascii_lower(text: str) -> bool:
@@ -1768,9 +1855,11 @@ def chinese_variant_mismatch(result: str, dst: Any) -> str:
 def looks_like_leading_label_leak(result: Any, source: Any = None, history: Any = None) -> bool:
     text = "" if result is None else str(result)
     src_text = "" if source is None else str(source)
+    colon_width = 1
     c = text.find(":")
     if c < 0:
         c = text.find("：")
+        colon_width = 3
     if c < 1 or c > 20:
         return False
     sc = src_text.find(":")
@@ -1778,7 +1867,7 @@ def looks_like_leading_label_leak(result: Any, source: Any = None, history: Any 
         sc = src_text.find("：")
     if 1 <= sc <= 20:
         return False
-    label = text[:c + 1]
+    label = text[:c + colon_width]
     for pair in history or []:
         try:
             _src, dst = pair
@@ -1794,7 +1883,10 @@ def looks_like_history_leak(result: Any, history: Any = None, source: Any = None
     source_text = "" if source is None else str(source)
     if looks_like_leading_label_leak(text, source_text, history):
         return True
-    if any(marker in text for marker in ("【最近台词", "- 原文", "原文：", "译文：", "译文:")):
+    if any(marker in text for marker in (
+        "【背景信息", "【最近台词", "【待翻译文本",
+        "- 原文", "- 译文", "原文：", "原文:", "译文：", "译文:",
+    )):
         return True
     for pair in history or []:
         try:
@@ -1827,6 +1919,26 @@ def looks_like_history_leak(result: Any, history: Any = None, source: Any = None
     return False
 
 
+FORBID_KANA = ("zh", "zh-cn", "zh-tw", "ko")
+FORBID_HANGUL = ("zh", "zh-cn", "zh-tw", "ja")
+FORBID_HAN = ("ko",)
+
+
+def has_forbidden_target_script(result: Any, dst: Any) -> bool:
+    """镜像 .as HasForbiddenTargetScript：挡住明显错误的目标脚本。"""
+    text = "" if result is None else str(result)
+    code = lang_code(dst)
+    kana = any("\u3040" <= ch <= "\u30ff" for ch in text)
+    hangul = any("\uac00" <= ch <= "\ud7a3" for ch in text)
+    if code in FORBID_KANA and kana:
+        return True
+    if code in FORBID_HANGUL and hangul:
+        return True
+    if code in FORBID_HAN and not hangul and has_han(text):
+        return True
+    return False
+
+
 def validate_translation(
     source: Any, result: Any, src: Any = "", dst: Any = "", history: Any = None
 ) -> str:
@@ -1843,13 +1955,18 @@ def validate_translation(
     dst_code = lang_code(dst)
     if src_code and src_code == dst_code:
         return ""
+    if has_forbidden_target_script(result_text, dst):
+        return "wrong_script"
 
     sim_src = simplified_for_echo(source_text)
     sim_dst = simplified_for_echo(result_text)
     if sim_src == sim_dst and len(sim_src.encode("utf-8")) >= 5 and has_ascii_lower(source_text):
         return "echo"
 
-    needs_non_ascii = dst_code in ("zh", "ja", "ko", "ar", "he", "fa", "ur")
+    needs_non_ascii = dst_code in (
+        "zh", "ja", "ko", "ar", "he", "fa", "ur", "ru", "uk", "bg",
+        "el", "hi", "bn", "th", "ka", "hy", "km", "lo", "my", "mn",
+    )
     if (
         needs_non_ascii
         and len(result_text.encode("utf-8")) >= 3
@@ -1858,6 +1975,15 @@ def validate_translation(
         and looks_like_latin_sentence(result_text)
     ):
         return "wrong_script"
+
+    needs_latin = dst_code in LATIN_CODES
+    if needs_latin and len(result_text.encode("utf-8")) >= 3 and not has_ascii_alpha(result_text):
+        if any(ch in result_text for ch in _HAN_MARKERS):
+            return "wrong_script"
+        if any("\u3040" <= ch <= "\u30ff" for ch in result_text):
+            return "wrong_script"
+        if any("\uac00" <= ch <= "\ud7a3" for ch in result_text):
+            return "wrong_script"
 
     variant_error = chinese_variant_mismatch(result_text, dst)
     if variant_error:
@@ -1890,6 +2016,29 @@ _MUSIC_SYMBOLS = (
 )
 
 
+_HAN_MARKERS = (
+    "的", "是", "了", "我", "你", "他", "她", "它", "不", "在",
+    "有", "这", "那", "说", "要", "就", "都", "还", "把", "被",
+    "和", "与", "上", "下", "中", "来", "去", "好", "很", "会",
+    "能", "人", "个", "们", "吗", "呢", "啊", "吧", "什", "么",
+    "怎", "为", "因", "所", "以", "但", "可", "一", "二", "三",
+)
+
+
+def is_likely_chinese_text(text: Any) -> bool:
+    """镜像 .as IsLikelyChineseText：必须有非 ASCII 且存在汉字证据。"""
+    value = "" if text is None else str(text)
+    if not any(ord(ch) > 126 for ch in value):
+        return False
+    if any("\u3040" <= ch <= "\u30ff" for ch in value):
+        return False
+    if any("\uac00" <= ch <= "\ud7a3" for ch in value):
+        return False
+    if any(ch in _ZH_SIMP_ONLY or ch in _ZH_TRAD_ONLY for ch in value):
+        return True
+    return has_han(value)
+
+
 def is_non_dialogue_text(text: Any) -> bool:
     """镜像 .as IsNonDialogueText：纯符号/音乐/数字行不请求翻译。"""
     value = "" if text is None else str(text).strip()
@@ -1920,7 +2069,7 @@ def perform_request(req: Any) -> Tuple[bool, Any]:
 
 
 def fetch_models(
-    spec: Any, key: Any = "", timeout: float = PROBE_TIMEOUT
+    spec: Any, key: Any = "", timeout: Any = None
 ) -> Tuple[bool, Any]:
     """执行模型列表探测，返回 ``(True, [names])`` 或 ``(False, Err)``。"""
     ok, req = build_probe_request(spec, key, timeout=timeout)
@@ -2019,6 +2168,8 @@ __all__ = [
     "PRESET_ORDER",
     "PROBE_MODES",
     "PROBE_TIMEOUT",
+    "MAX_RESPONSE_BYTES",
+    "LATIN_CODES",
     "Preset",
     "Request",
     "SEND_TIMEOUT",
@@ -2037,6 +2188,7 @@ __all__ = [
     "fetch_models",
     "host_url_encode",
     "is_non_dialogue_text",
+    "is_likely_chinese_text",
     "is_rtl",
     "join_models",
     "json_escape",
@@ -2064,6 +2216,10 @@ __all__ = [
     "translate_with_spec",
     "validate_translation",
     "validation_reason_zh",
+    "normalize_source_key",
+    "has_han",
+    "has_forbidden_target_script",
+    "parse_header_entry",
+    "validate_headers_template",
     "walk_path",
 ]
-
