@@ -126,7 +126,7 @@ void OnInitialize() / void OnFinalize()
 登录框 `User` 字段：
 
 ```
-preset[:model][|opts]                      例：deepseek:deepseek-v4-flash|debug=1
+preset[:model][|opts]                      例：deepseek:deepseek-v4.1-flash-1017|debug=1
 custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/v1/chat/completions|my-model
 ```
 
@@ -150,27 +150,29 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 
 | preset | base URL | 默认模型 | 协议 | 鉴权 |
 | --- | --- | --- | --- | --- |
-| `vllm` | `http://127.0.0.1:8000/v1` | 服务端默认模型（留空） | OpenAI 兼容 | 无 |
-| `sglang` | `http://127.0.0.1:30000/v1` | 服务端默认模型（留空） | OpenAI 兼容 | 无 |
-| `lmstudio` | `http://127.0.0.1:1234/v1` | 服务端默认模型（留空） | OpenAI 兼容 | 无 |
-| `ollama` | `http://127.0.0.1:11434` | 留空（用 `ollama:<model>` 指定） | Ollama | 无 |
+| `vllm` | `http://127.0.0.1:8000/v1` | 服务端已加载模型 | OpenAI 兼容 | 无 |
+| `sglang` | `http://127.0.0.1:30000/v1` | 服务端已加载模型 | OpenAI 兼容 | 无 |
+| `lmstudio` | `http://127.0.0.1:1234/v1` | 服务端已加载模型 | OpenAI 兼容 | 无 |
+| `ollama` | `http://127.0.0.1:11434` | 无默认，需显式指定 | Ollama | 无 |
 | `openai` | `https://api.openai.com/v1` | `gpt-5.6-terra` | OpenAI 兼容 | Bearer |
-| `deepseek` | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | OpenAI 兼容（关闭思考） | Bearer |
+| `deepseek` | `https://api.deepseek.com/v1` | `deepseek-v4.1-flash-1017` | OpenAI 兼容（默认关闭 thinking） | Bearer |
 | `moonshot` | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` | OpenAI 兼容 | Bearer |
 | `zhipu` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` | OpenAI 兼容 | Bearer |
-| `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-flash` | OpenAI 兼容（关闭思考） | Bearer |
-| `siliconflow` | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V4-Flash` | OpenAI 兼容（关闭思考） | Bearer |
+| `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.7-flash` | OpenAI 兼容（默认关闭 thinking） | Bearer |
+| `siliconflow` | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V4.1-Flash` | OpenAI 兼容（默认关闭 thinking） | Bearer |
 | `openrouter` | `https://openrouter.ai/api/v1` | `openai/gpt-5.6-terra` | OpenAI 兼容 | Bearer |
 | `groq` | `https://api.groq.com/openai/v1` | `openai/gpt-oss-120b` | OpenAI 兼容 | Bearer |
 | `xai` | `https://api.x.ai/v1` | `grok-4.7` | OpenAI 兼容 | Bearer |
 | `mistral` | `https://api.mistral.ai/v1` | `mistral-small-latest` | OpenAI 兼容 | Bearer |
-| `together` | `https://api.together.ai/v1` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | OpenAI 兼容 | Bearer |
+| `together` | `https://api.together.ai/v1` | `moonshotai/Kimi-K3` | OpenAI 兼容 | Bearer |
 | `anthropic` | `https://api.anthropic.com` | `claude-sonnet-4-6` | Anthropic | `x-api-key` |
 | `gemini` | `https://generativelanguage.googleapis.com` | `gemini-3.5-flash` | Gemini | `x-goog-api-key` 头 |
 | `custom` | 用户自填完整请求地址 | 用户自填 | 默认 OpenAI 兼容 | Bearer |
 
 > 模型名是 2026-11 核对时的示例值，服务商随时会改；登录自检失败会列出该 Key
 > 可用模型，按提示改 `preset:model` 即可。
+
+Ollama 的 `/api/chat` 必须显式传 `model`，所以没有默认模型；LM Studio、vLLM、SGLang 的 OpenAI 兼容端点可以省略 `model`，使用服务端已加载模型。
 
 ### 5.2 常用选项
 
@@ -185,7 +187,7 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 | `max_tokens` | 输出上限（默认不发送；Anthropic 必填，默认 1024） | 不发送 |
 | `minimal` | `1` = 强制最小请求体（只带 model/messages/stream；custom 带 body 模板时仍优先模板） | `0` |
 | `version` | Anthropic `anthropic-version` 头 | `2023-06-01` |
-| `probe` | 登录自检：`models` 或 `none`；custom 显式 `models` 时从 endpoint 派生 `/models` | `custom` 默认 `none`，其余 `models` |
+| `probe` | 登录自检：默认 `models`，仅 custom 为 `none`；custom 显式 `models` 时从 endpoint 派生 `/models` | `models`，仅 custom 为 `none` |
 | `probe_timeout` | 登录自检超时毫秒，`1000..60000` | `10000` |
 | `debug` | `1` 诊断摘要；`2` 额外输出请求/响应内容（敏感） | `0` |
 | `style` | 翻译风格模板（见 §5.3） | `movie` |
@@ -196,15 +198,29 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 | `deadline` | 单条字幕总预算（毫秒），`2000..20000` | `6000` |
 | `cache` | `1` 启用译文缓存；`0` 关闭缓存命中与写入 | `1` |
 | `dst` | 强制目标语言代码（如 `ko`、`zh-CN`），绕过宿主目标语言缓存 | 跟随界面选择 |
-| `think` | `0`/`1` 按服务商发送 thinking 开关：DeepSeek/Moonshot/Zhipu `thinking.type`，Qwen/SiliconFlow `enable_thinking`，OpenRouter `reasoning.enabled`，本地/custom `chat_template_kwargs`，OpenAI/Groq/xAI/Together/Mistral `reasoning_effort`（0=minimal，1=medium），Ollama `think`；Gemini 仅 `0` 发送 `thinkingConfig.thinkingBudget=0`，`1` 不发送正字段 | 不发送 |
+| `think` | 思考开关：`0` 关闭/降低，`1` 开启/提高；字段映射见下表 | 不发送 |
+
+`think` 字段映射：
+
+| 服务商 | 字段 |
+| --- | --- |
+| DeepSeek / Moonshot / Zhipu | `thinking.type`：`enabled` / `disabled` |
+| Qwen / SiliconFlow | `enable_thinking` |
+| OpenRouter | `reasoning.enabled` |
+| vLLM / SGLang / LM Studio / custom | `chat_template_kwargs.enable_thinking` |
+| OpenAI / Groq / xAI / Together / Mistral | `reasoning_effort`：`0=minimal`、`1=medium` |
+| Ollama | `think` |
+| Gemini | `think=0` 发送 `thinkingConfig.thinkingBudget=0`；`think=1` 不发送正字段 |
+
+`minimal` 是最低强度，不等同于严格关闭；未设置时不额外发送，预设字段仍生效。
 
 示例：
 
 ```
-deepseek:deepseek-v4-flash
+deepseek:deepseek-v4.1-flash-1017
 openai:gpt-5.6-terra|temp=0.1
 gemini:gemini-3.5-flash
-deepseek:deepseek-v4-flash|style=anime;contextitems=8;deadline=5000
+deepseek:deepseek-v4.1-flash-1017|style=anime;contextitems=8;deadline=5000
 custom|http://127.0.0.1:18080/v1/chat/completions|index2b|auth=none;dst=ko;debug=1
 custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;auth=x-api-key;keyname=X-Key
 ```
@@ -237,7 +253,7 @@ prompt 同时给出最近 N 组原文与译文；`0` 关闭。窗口上限 32。
   `Authorization: Bearer <key>`；体
   `{model, messages:[{role:"user",content:prompt}], stream:false, temperature}`。
   `model`、`temperature` 可省略；`max_completion_tokens` 仅在 `max_tokens=` 显式给出时发送。
-  DeepSeek / Qwen / SiliconFlow 预设会追加关闭思考的厂商字段
+  DeepSeek / Qwen / SiliconFlow 预设会追加默认关闭 thinking 的厂商字段
   （`{"thinking":{"type":"disabled"}}`、`"enable_thinking":false`）。
 - **anthropic**：`POST {base}/v1/messages`，头 `x-api-key`、
   `anthropic-version: <version>`；体

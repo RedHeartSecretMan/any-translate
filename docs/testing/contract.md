@@ -98,21 +98,21 @@ auth   := bearer | x-api-key | query | none
 
 | preset | base URL | 默认模型 | kind | 默认 auth / keyname |
 | --- | --- | --- | --- | --- |
-| vllm | `http://127.0.0.1:8000/v1` | 服务端默认模型 | openai | none |
-| sglang | `http://127.0.0.1:30000/v1` | 服务端默认模型 | openai | none |
-| lmstudio | `http://127.0.0.1:1234/v1` | 服务端默认模型 | openai | none |
-| ollama | `http://127.0.0.1:11434` | 留空（用 `ollama:<model>` 指定） | ollama | none |
+| vllm | `http://127.0.0.1:8000/v1` | 服务端已加载模型 | openai | none |
+| sglang | `http://127.0.0.1:30000/v1` | 服务端已加载模型 | openai | none |
+| lmstudio | `http://127.0.0.1:1234/v1` | 服务端已加载模型 | openai | none |
+| ollama | `http://127.0.0.1:11434` | 无默认，需显式指定 | ollama | none |
 | openai | `https://api.openai.com/v1` | `gpt-5.6-terra` | openai | bearer |
-| deepseek | `https://api.deepseek.com/v1` | `deepseek-v4-flash` | openai | bearer（追加关闭思考字段） |
+| deepseek | `https://api.deepseek.com/v1` | `deepseek-v4.1-flash-1017` | openai | bearer（预设默认关闭 thinking） |
 | moonshot | `https://api.moonshot.cn/v1` | `kimi-k3.1-pro` | openai | bearer |
 | zhipu | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` | openai | bearer |
-| qwen | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-flash` | openai | bearer（追加关闭思考字段） |
-| siliconflow | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V4-Flash` | openai | bearer（追加关闭思考字段） |
+| qwen | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3.7-flash` | openai | bearer（预设默认关闭 thinking） |
+| siliconflow | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V4.1-Flash` | openai | bearer（预设默认关闭 thinking） |
 | openrouter | `https://openrouter.ai/api/v1` | `openai/gpt-5.6-terra` | openai | bearer |
 | groq | `https://api.groq.com/openai/v1` | `openai/gpt-oss-120b` | openai | bearer |
 | xai | `https://api.x.ai/v1` | `grok-4.7` | openai | bearer |
 | mistral | `https://api.mistral.ai/v1` | `mistral-small-latest` | openai | bearer |
-| together | `https://api.together.ai/v1` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | openai | bearer |
+| together | `https://api.together.ai/v1` | `moonshotai/Kimi-K3` | openai | bearer |
 | anthropic | `https://api.anthropic.com` | `claude-sonnet-4-6` | anthropic | x-api-key / `x-api-key` |
 | gemini | `https://generativelanguage.googleapis.com` | `gemini-3.5-flash` | gemini | x-api-key / `x-goog-api-key` |
 | custom | 用户自填完整请求地址 | 服务端默认模型 | openai（默认） | bearer |
@@ -216,7 +216,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 
 ### 3.7 登录自检（`ServerLogin` + `Probe`）
 
-- `probe` 默认：预设 `models`，custom `none`；`probe=none` 跳过探测；custom 显式 `probe=models` 时派生 `/models` 并探测。
+- `probe` 默认：`models`，仅 custom 为 `none`；`probe=none` 跳过探测；custom 显式 `probe=models` 时派生 `/models` 并探测。
 - 探测 URL：openai `{base}/models`、ollama `{base}/api/tags`、
   anthropic `{base}/v1/models`、gemini `{base}/v1beta/models`
   （`auth=query` 时与翻译共用 `AppendQueryAuth`，URL 追加 `?key=<key>`，
@@ -283,7 +283,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 | E-23 | 降级补充 | 413 尝试无上下文；网络错误/408 在 deadline 内短重试一次 | ✅ resolved |
 | E-13 | 错误呈现方式 | ref 用稳定错误码 + `Err.detail` 供断言；`.as` 返回空串 + `ErrorHint` Dbg，不向字幕混入错误文案（DESIGN §4） | 📌 interface difference |
 | E-14 | lmstudio/vllm/sglang 认证 | auth=none，无需 Key（`P_AUTH`） | ✅ resolved |
-| E-15 | 默认 probe | 预设 `models`、custom `none`（DESIGN §5.2） | ✅ resolved |
+| E-15 | 默认 probe | `models`，仅 custom 为 `none`（DESIGN §5.2） | ✅ resolved |
 | E-16 | body 模板 JSON 校验 | `.as` 不校验；ref 额外校验并返回 `bad_body_template`（安全增强，防注入/坏请求） | 📌 ref stricter |
 | E-17 | path 下标限制 | 只支持 0-9 单数字（DESIGN 6.2）；多位数 `[10]` 在 `.as` 与 ref 中都取不到值 | ✅ aligned |
 | E-18 | 持久化/上下文/缓存/重试 | `HostSaveString`、历史窗口、缓存、暂停重置等状态行为不属纯契约函数 | ⏳ out of scope |

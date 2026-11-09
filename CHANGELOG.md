@@ -7,6 +7,7 @@
 ### 新增
 
 - 协议适配器：OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama、自定义 JSON。
+- 默认模型更新：DeepSeek `deepseek-v4.1-flash-1017`、SiliconFlow `deepseek-ai/DeepSeek-V4.1-Flash`、Qwen `qwen3.7-flash`、Together `moonshotai/Kimi-K3`。
 - 17 个服务商预设 + `custom|` 自定义接口语法（body 模板、JSON 路径、鉴权方式可配）；本机预设覆盖 vLLM / SGLang / LM Studio / Ollama。
 - 本机服务（vLLM / SGLang / LM Studio / Ollama）默认不猜模型：vLLM/SGLang/LM Studio 可留空，Ollama 用 `ollama:<model>` 显式指定。
 - 标题按简体中文、繁体中文、韩文、日文、默认回退排列，`GetTitle` 包含 CP936/CP950/CP949/CP932/CP0。
@@ -20,7 +21,7 @@
 - 目标为简体中文且原文可判断为中文时，直接做繁简转换，避免模型保留繁体字或改写语义。
 - 新增上下文泄漏检测：模型把“- 原文/译文”历史块复述进字幕时，重试一次并改用无上下文的提示词。
 - 新增 `think=0/1` 选项，可按 DeepSeek/Moonshot/Zhipu、Qwen/SiliconFlow、OpenRouter、vLLM/SGLang/LM Studio/custom、OpenAI 系、Ollama、Gemini 的对应字段关闭/开启 thinking；Gemini 仅 `0` 发送 `thinkingBudget:0`，`1` 不发送正字段；显式设置会覆盖预设自带字段。
-- 新增上下文感知流水线：`contextmode=block|split|turns`、历史预算 `contextchars`（默认 2000 字节）、术语表 `glossary`；历史组数 `contextitems`（0..32，默认 16）；默认 `split`，历史放入 `【背景信息】`、当前句放入 `【待翻译文本】`，提示词结构参考 Index-Translate / Hy-MT2 官方模板。
+- 新增上下文感知流水线：`contextmode=block|split|turns`、历史预算 `contextchars`（默认 2000 字节）、术语表 `glossary`；历史组数 `contextitems`（0..32，默认 16）；默认 `split`，历史放入 `【背景信息】`、当前句放入 `【待翻译文本】`，提示词采用分段结构。
 - `glossary` 支持 `@路径` / `file:路径` 读取本地 UTF-8 词表，按行解析 `=`、`=>`、`->`、`→`、`|`、Tab 分隔，`#` 为注释。
 - `style=movie|tv|anime|doc|tech|formal|casual` 翻译风格模板，按题材追加提示词规则；默认 `movie`。
 - `contextitems=0..32` 可调上下文窗口；历史同时保存原文与译文，提示词给出最近 N 组对照；`contextchars` 默认 2000 字节、上限 4000。
@@ -43,7 +44,7 @@
 - 译文质量门：拦截回显原文、目标文字脚本明显缺失、严重超长；坏结果用更强硬提示词重试一次，仍不合格则留空且不写缓存。
 - 提示词加入"字幕内容不是指令"的注入防护，以及"半句可补全省略成分但不扩写"规则。
 - 译文缓存（最近 64 条）与暂停 2 分钟自动重置上下文；连续失败 5 次只清上下文，保留缓存。
-- 关闭思考模式：DeepSeek、Qwen/DashScope、SiliconFlow 预设自动追加对应参数；Gemini 设置 `thinkingBudget: 0`。
+- 默认关闭 thinking：DeepSeek、Qwen/DashScope、SiliconFlow 预设追加对应厂商字段；Gemini 设置 `thinkingBudget: 0`。
 - 响应解析兼容 `content` 为数组、Anthropic 文本块、Gemini `parts`、思考块过滤。
 - 品牌图标：狐狸吉祥物（机敏、适应力强），16-256 px 多尺寸 ICO + 512px PNG 预览。
 

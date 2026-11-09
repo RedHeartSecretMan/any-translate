@@ -58,13 +58,13 @@ CONTROL_DROP = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f]")
 #: preset -> (kind, base, auth, 默认模型, 默认 keyname)
 PRESET_EXPECTED = {
     "openai": (KIND_OPENAI, "https://api.openai.com/v1", "bearer", "gpt-5.6-terra", ""),
-    "deepseek": (KIND_OPENAI, "https://api.deepseek.com/v1", "bearer", "deepseek-v4-flash", ""),
+    "deepseek": (KIND_OPENAI, "https://api.deepseek.com/v1", "bearer", "deepseek-v4.1-flash-1017", ""),
     "moonshot": (KIND_OPENAI, "https://api.moonshot.cn/v1", "bearer", "kimi-k3.1-pro", ""),
     "zhipu": (KIND_OPENAI, "https://open.bigmodel.cn/api/paas/v4", "bearer", "glm-5.3", ""),
     "qwen": (KIND_OPENAI, "https://dashscope.aliyuncs.com/compatible-mode/v1", "bearer",
-             "qwen-flash", ""),
+             "qwen3.7-flash", ""),
     "siliconflow": (KIND_OPENAI, "https://api.siliconflow.cn/v1", "bearer",
-                    "deepseek-ai/DeepSeek-V4-Flash", ""),
+                    "deepseek-ai/DeepSeek-V4.1-Flash", ""),
     "openrouter": (KIND_OPENAI, "https://openrouter.ai/api/v1", "bearer",
                    "openai/gpt-5.6-terra", ""),
     "groq": (KIND_OPENAI, "https://api.groq.com/openai/v1", "bearer",
@@ -73,7 +73,7 @@ PRESET_EXPECTED = {
     "mistral": (KIND_OPENAI, "https://api.mistral.ai/v1", "bearer",
                 "mistral-small-latest", ""),
     "together": (KIND_OPENAI, "https://api.together.ai/v1", "bearer",
-                 "meta-llama/Llama-3.3-70B-Instruct-Turbo", ""),
+                 "moonshotai/Kimi-K3", ""),
     "lmstudio": (KIND_OPENAI, "http://127.0.0.1:1234/v1", "none", "", ""),
     "vllm": (KIND_OPENAI, "http://127.0.0.1:8000/v1", "none", "", ""),
     "sglang": (KIND_OPENAI, "http://127.0.0.1:30000/v1", "none", "", ""),
@@ -692,7 +692,7 @@ class TestRequestBuilding(unittest.TestCase):
     def test_think_option_provider_fields(self):
         self.assertEqual(body_of(request_of("deepseek:deepseek-chat|think=0"))["thinking"], {"type": "disabled"})
         self.assertEqual(body_of(request_of("deepseek:deepseek-chat|think=1"))["thinking"], {"type": "enabled"})
-        self.assertIs(body_of(request_of("qwen:qwen-flash|think=1"))["enable_thinking"], True)
+        self.assertIs(body_of(request_of("qwen:qwen3.7-flash|think=1"))["enable_thinking"], True)
         self.assertIs(body_of(request_of("openrouter:openai/gpt-x|think=0"))["reasoning"]["enabled"], False)
         self.assertEqual(
             body_of(request_of("gemini:gemini-3.5-flash|think=0"))["generationConfig"]["thinkingConfig"],
@@ -718,9 +718,9 @@ class TestRequestBuilding(unittest.TestCase):
     def test_preset_default_model_flows_into_body(self):
         cases = {
             "openai": "gpt-5.6-terra",
-            "deepseek": "deepseek-v4-flash",
+            "deepseek": "deepseek-v4.1-flash-1017",
             "groq": "openai/gpt-oss-120b",
-            "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            "together": "moonshotai/Kimi-K3",
             "anthropic": "claude-sonnet-4-6",
             "gemini": "gemini-3.5-flash",
         }
@@ -2187,7 +2187,7 @@ class TestMockServerE2E(unittest.TestCase):
     def test_openai_preset_default_model_recorded(self):
         ok, text = self._translate("deepseek")
         self.assertTrue(ok, msg=text)
-        self.assertEqual(self._last()["body_json"]["model"], "deepseek-v4-flash")
+        self.assertEqual(self._last()["body_json"]["model"], "deepseek-v4.1-flash-1017")
 
     def test_openai_content_array_scenario(self):
         ok, text = self._translate("deepseek:deepseek-chat", scenario="array")

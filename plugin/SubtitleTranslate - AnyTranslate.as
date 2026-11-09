@@ -40,7 +40,7 @@ string GetLoginTitle()
 
 string GetLoginDesc()
 {
-    return "示例：deepseek:deepseek-v4-flash";
+    return "示例：deepseek:deepseek-v4.1-flash-1017";
 }
 
 string GetUserText()
@@ -190,16 +190,16 @@ array<string> P_MODEL =
     "",
     "",
     "gpt-5.6-terra",
-    "deepseek-v4-flash",
+    "deepseek-v4.1-flash-1017",
     "kimi-k3.1-pro",
     "glm-5.3",
-    "qwen-flash",
-    "deepseek-ai/DeepSeek-V4-Flash",
+    "qwen3.7-flash",
+    "deepseek-ai/DeepSeek-V4.1-Flash",
     "openai/gpt-5.6-terra",
     "openai/gpt-oss-120b",
     "grok-4.7",
     "mistral-small-latest",
-    "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "moonshotai/Kimi-K3",
     "claude-sonnet-4-6",
     "gemini-3.5-flash",
     ""
