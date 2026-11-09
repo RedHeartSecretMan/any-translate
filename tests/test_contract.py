@@ -358,6 +358,14 @@ class TestSpecParsing(unittest.TestCase):
         self.assertEqual(spec.context_mode, "split")
         self.assertEqual(spec.context_chars, 2000)
         self.assertEqual(spec.glossary, ())
+        self.assertTrue(spec.cache)
+
+        ok, spec = ref_impl.parse_spec("deepseek:deepseek-chat|cache=0")
+        self.assertTrue(ok, msg=spec)
+        self.assertFalse(spec.cache)
+        ok, err = ref_impl.parse_spec("deepseek:deepseek-chat|cache=maybe")
+        self.assertFalse(ok)
+        self.assertEqual(err.code, "bad_opts")
 
         ok, err = ref_impl.parse_spec("deepseek:deepseek-chat|contextmode=bad")
         self.assertFalse(ok)

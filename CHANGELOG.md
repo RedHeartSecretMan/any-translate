@@ -24,7 +24,7 @@
 - `glossary` 支持 `@路径` / `file:路径` 读取本地 UTF-8 词表，按行解析 `=`、`=>`、`->`、`→`、`|`、Tab 分隔，`#` 为注释。
 - `style=movie|tv|anime|doc|tech|formal|casual` 翻译风格模板，按题材追加提示词规则；默认 `movie`。
 - `contextitems=0..32` 可调上下文窗口；历史同时保存原文与译文，提示词给出最近 N 组对照；`contextchars` 默认 2000 字节、上限 4000。
-- 缓存按 provider/model/base/真实源语言/目标/风格/上下文模式、路径/模板/扩展字段/温度/max_tokens/think/glossary 与历史指纹区分，加入 LRU/TTL；切换播放文件自动清理上下文和缓存。
+- 缓存按静态配置 + 原文区分，不再要求当前历史一致，加入 LRU/TTL 和 `cache=0/1` 开关；切换播放文件自动清理上下文和缓存。
 - 未知 opts、缺 `=` 或空 key 登录时报错。
 - 429/5xx 重试支持 `Retry-After`。
 - `custom` 显式设置 `probe=models` 时，会从 OpenAI 兼容 endpoint 派生 `/models`，登录时校验并列出可用模型；默认仍为 `none`；新增 `probe_timeout` 和 `headers`，`debug=2` 才输出请求/响应正文。
@@ -60,7 +60,7 @@
 ### 验证
 
 - `tests/test_static.py` 静态检查通过（括号配平、入口点、语言表/预设表/风格表长度、Host API 签名核对、语言表定义守护）。
-- `tests/` 236 项检查全部通过（231 契约用例 + 5 静态检查；Python 参考实现 + 本机 mock 服务）；Windows PowerShell 5.1 与 PowerShell 7 均验证可跑。
+- `tests/` 237 项检查全部通过（231 契约用例 + 6 静态检查；Python 参考实现 + 本机 mock 服务）；Windows PowerShell 5.1 与 PowerShell 7 均验证可跑。
 - 独立代码审查：P0 = 0，P1 全部修复；`HostGetStatusHTTP` 等宿主行为列为实机必验项。
 
 ### 已知限制

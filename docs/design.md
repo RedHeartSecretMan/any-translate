@@ -3,7 +3,8 @@
 > PotPlayer 实时字幕翻译插件，单文件 AngelScript 实现，可接入任意 LLM / 翻译 API。
 > 版本：0.1.0（脚本 `GetVersion` 返回 `0.1.0`）｜作者：RedHeartSecretMan｜文档状态：实现契约
 >
-> 上下文流水线的设计动机、阶段与验收见 [`pipeline-design.md`](pipeline-design.md)。
+> 本文件是实现契约与设计取舍的单一入口；测试证据见 [`verification.md`](verification.md)，
+> 契约细节见 [`testing/contract.md`](testing/contract.md)。
 
 ## 1. 背景与目标
 
@@ -34,6 +35,9 @@ Translate
 请求上下文主要放在 `TranslationJob`；HTTP 状态码/响应体等仍由 `SendOnce` 的既有全局状态维护。
 `SrcLang`/`DstLang` 的 `UTF8` 写回必须留在 `Translate` 内：AngelScript 的
 非 const `&in` 对象参数在脚本调用点按副本传递，helper 内赋值不会回写宿主参数。
+
+上下文模式最初是 `block` 单条 user；当前默认 `split`，并保留 `block` 兼容回退和
+`turns` 可选模式。上下文窗口、字节预算和 glossary 的取舍直接记录在本文件对应章节。
 
 ## 2. 设计取舍
 
@@ -133,7 +137,7 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
   可留空（服务端默认模型）；
 - `opts` 以 `;` 分隔、`=` 赋值：`path`、`auth`、`keyname`、`body`、`headers`、`temp`、
   `max_tokens`、`minimal`、`version`、`probe`、`probe_timeout`、`debug`、`style`、`contextitems`、
-  `contextmode`、`contextchars`、`glossary`、`deadline`、`dst`、`think`；
+  `contextmode`、`contextchars`、`glossary`、`deadline`、`dst`、`think`、`cache`；
 - `auth=query` 时 Key 拼进 URL（参数名 `keyname`，默认 `key`；Gemini 的 query
   参数名是 `key`）。能走请求头就别用 query，Key 会出现在代理/网关日志里；
   该模式只对支持 URL 鉴权的服务有意义（Gemini、部分自定义网关），
@@ -190,6 +194,7 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 | `contextchars` | 历史上下文预算（UTF-8 字节），`0..4000`，`0` 不限 | `2000` |
 | `glossary` | 术语表：内联 `原文=译名,...`，或 `@路径` / `file:路径` 本地词表；最多 32 条 | 空 |
 | `deadline` | 单条字幕总预算（毫秒），`2000..20000` | `6000` |
+| `cache` | `1` 启用译文缓存；`0` 关闭缓存命中与写入 | `1` |
 | `dst` | 强制目标语言代码（如 `ko`、`zh-CN`），绕过宿主目标语言缓存 | 跟随界面选择 |
 | `think` | `0`/`1` 按服务商发送 thinking 开关：DeepSeek/Moonshot/Zhipu `thinking.type`，Qwen/SiliconFlow `enable_thinking`，OpenRouter `reasoning.enabled`，本地/custom `chat_template_kwargs`，OpenAI/Groq/xAI/Together/Mistral `reasoning_effort`（0=minimal，1=medium），Ollama `think`；Gemini 仅 `0` 发送 `thinkingConfig.thinkingBudget=0`，`1` 不发送正字段 | 不发送 |
 
@@ -315,7 +320,7 @@ Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预
 ## 8. 性能与成本
 
 - **上下文窗口**：保留最近 16 组原文+译文（`contextitems=0..32`），按 UTF-8 字节预算截断，作为"仅供参考、禁止翻译"的语境块；
-- **缓存**：最近 64 条，按 provider/model/base/真实源语言/目标/风格/上下文指纹、vendor `path`、custom `headers`/`body`/扩展字段、温度/max_tokens/think/glossary 区分；LRU + 10 分钟 TTL；同上下文下的重复台词命中后直接返回；
+- **缓存**：最近 64 条，按静态配置（provider/model/base/真实源语言/目标/风格/上下文配置、vendor `path`、custom `headers`/`body`/扩展字段、温度/max_tokens/think/glossary）+ 原文区分，**不包含当前历史**；LRU + 10 分钟 TTL；同配置下重复台词命中后直接返回。`cache=0` 关闭命中与写入；缓存命中可能复用不同语境下的旧译文；
 - **暂停重置**：距上次翻译超过 120 秒清空上下文与缓存；
 - **实时预算**：单条字幕默认 6 s（`deadline=2000..20000`），预算内才继续重试；
 - **非对白**：纯符号/数字/音乐行本地原样返回，不产生请求；
@@ -367,7 +372,9 @@ Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预
 11. 目标脚本策略只覆盖中文/日文/韩文的明显串脚本问题，`sr` 允许拉丁或西里尔；不宣称完整脚本检测；
 12. 413 降级会去掉上下文后重试一次；网络错误/408 只在 deadline 剩余时短重试一次；
 13. `deadline` 限制的是重试与脚本超时预算，不能取消已经发出的同步 HTTP 请求；
-    首次请求本身仍可能接近 `deadline` 才返回。
+    首次请求本身仍可能接近 `deadline` 才返回；
+14. 缓存按“静态配置 + 原文”命中，不包含当前历史；可能复用不同语境下的旧译文，
+    对强依赖上下文的短句尤其明显；可用 `cache=0` 关闭。
 
 ## 12. 文案与命名约定
 

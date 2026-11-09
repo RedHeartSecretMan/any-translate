@@ -48,7 +48,7 @@ any-translate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译
 | 中文简繁 | 目标简体且原文是中文时直接逐字转换，避免模型保留繁体或改写语义 |
 | 实时预算 | 单条字幕默认 6 s 总预算，预算内才继续降级/质量重试；`deadline=2000..20000` 可调；413 会尝试无上下文降级 |
 | 非对白过滤 | 纯符号、纯数字、音乐符号行不请求 API，原样返回 |
-| 缓存去重 | 同一上下文下的相同台词命中缓存（最近 64 条），避免重复请求与计费 |
+| 缓存去重 | 同一配置下的相同台词命中缓存（最近 64 条，不依赖当前上下文），可用 `cache=0` 关闭 |
 | 登录自检 | 按协议探测模型列表，校验 Key 与模型名，失败给出可操作提示 |
 | 自动降级 | 服务端拒绝 `temperature` / `max_tokens` 时改用最小请求体并记住 |
 | 诊断模式 | `debug=1` 查看状态码、长度与耗时摘要及 requests/cache/retries/invalid 统计；`debug=2` 才输出请求/响应正文 |
@@ -96,28 +96,28 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Uninstall
 点击插件旁边的配置/登录按钮：
 
 - **用户** 框填服务与模型，例如 `deepseek:deepseek-v4-flash`；
-- **密码** 框填 API Key（本机服务可以留空）；
+- **密码** 框填 API Key；
 - 点确定后插件会自检 Key 与模型名，失败会提示原因和可用模型。
 
 | 场景 | 用户框 | 密码框 |
 | --- | --- | --- |
-| vLLM（本机） | `vllm`（默认使用已加载模型） | 留空 |
-| SGLang（本机） | `sglang`（默认使用已加载模型） | 留空 |
-| LM Studio（本机） | `lmstudio`（默认使用已加载模型） | 留空 |
-| Ollama（本机） | `ollama:qwen3:4b`（必须显式指定模型） | 留空 |
+| vLLM（本机） | `vllm` | 留空 |
+| SGLang（本机） | `sglang` | 留空 |
+| LM Studio（本机） | `lmstudio` | 留空 |
+| Ollama（本机） | `ollama:qwen3:4b` | 留空 |
 | DeepSeek（云端） | `deepseek:deepseek-v4-flash` | `sk-...` |
 | OpenAI（云端） | `openai:gpt-5.6-terra` | `sk-...` |
 | Anthropic（云端） | `anthropic:claude-sonnet-4-6` | `sk-ant-...` |
 | Google Gemini（云端） | `gemini:gemini-3.5-flash` | AIza... |
 | 自定义接口 | `custom\|https://your-gateway/v1/chat/completions\|model-name` | 网关 Key |
 
-模型名只是示例，以服务商当前 `/models` 列表为准；填错时登录会提示可用模型。本机服务默认不猜模型：vLLM/SGLang/LM Studio 可留空使用已加载模型，Ollama 需要显式写 `ollama:<model>`（只写 `ollama` 会在登录时提示缺模型）。
+模型名只是示例，以服务商当前 `/models` 列表为准；填错时登录会提示可用模型。本机服务默认不猜模型：vLLM/SGLang/LM Studio 可留空使用已加载模型，Ollama 需要显式写 `ollama:<model>`，只写 `ollama` 会在登录时提示缺模型。
 
 ### 模型怎么选
 
 PotPlayer 的翻译插件登录框只有文本输入，没有“服务商/模型”下拉列表：
 
-- `preset` 或 `preset:`：使用预设的默认模型（本机预设默认留空）；
+- `preset` 或 `preset:`：使用预设的默认模型；
 - `preset:model`：显式覆盖为该服务商的任意模型；
 - 登录时会按 `probe=models` 拉取服务商的模型列表，但只用于校验和提示，不会自动改写配置；
 - 模型不匹配时，错误信息会列出最多 6 个可用示例，复制到冒号后重新登录即可。
@@ -144,10 +144,10 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 - `preset` 不区分大小写；`model` 只按**第一个** `:` 切分，所以 `ollama:qwen3:4b` 合法。
 - 任意 spec 都可以在结尾用 `|` 追加 opts（预设与 custom 都支持）。
 - `custom` 的 `endpoint_url` 是完整请求地址，不再追加协议路径。
-- `opts` 用 `;` 分隔、`=` 赋值；可用：`path`、`auth`、`keyname`、`body`、`headers`、`temp`、`max_tokens`、`minimal`、`version`、`probe`、`probe_timeout`、`debug`、`style`、`contextitems`、`contextmode`、`contextchars`、`glossary`、`deadline`、`dst`、`think`。
+- `opts` 用 `;` 分隔、`=` 赋值；可用：`path`、`auth`、`keyname`、`body`、`headers`、`temp`、`max_tokens`、`minimal`、`version`、`probe`、`probe_timeout`、`debug`、`style`、`contextitems`、`contextmode`、`contextchars`、`glossary`、`deadline`、`dst`、`think`、`cache`。
 - 未知 key、缺 `=` 或空 key 会在登录时报错，不再静默忽略；拼错配置会直接显示 `未知选项: ...`。
 - 旧版 `context=` 已移除，请改为 `contextitems=`；旧配置不会自动迁移，登录会明确报未知选项。
-- `body` 值不能含 `;`；custom 的 URL / model / body 不能含 `|`（没有转义机制）。
+- `body` 值不能含 `;`；custom 的 URL / model / body 不能含 `|`。
 - `headers` 仅对 custom 生效，格式为 `Header:Value|Header2:Value2`；`|` 分隔多个头，单个 Header 值不能含 `|` 或 `;`。
 - `auth=query` 会把 Key 拼进 URL（参数名 `keyname`，默认 `key`）；能走请求头就别用 query，Key 会出现在代理/网关日志里。`auth=query` 只对支持 URL 鉴权的服务有意义（Gemini、部分自定义网关）；OpenAI / Anthropic 官方接口不接受 query 鉴权，会以 401 明确失败。
 - 密码框留空时沿用上次保存的 Key；用户框留空时沿用上次保存的 spec。
@@ -162,7 +162,7 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 | `body` | 请求体模板，占位符 `{{prompt}}` `{{text}}` `{{model}}` `{{src}}` `{{dst}}`（后两者是语言显示名，不是语言码） | OpenAI 兼容体 |
 | `headers` | custom 额外请求头，`Header:Value\|Header2:Value2` | 空 |
 | `temp` | 采样温度 | `0.2` |
-| `max_tokens` | 输出上限（默认不发送；Anthropic 必填，默认 1024） | 不发送 |
+| `max_tokens` | 输出上限；默认不发送，Anthropic 必填且默认 1024 | 不发送 |
 | `minimal` | `1` = 强制最小请求体（custom 带 body 模板时仍优先模板） | `0` |
 | `version` | Anthropic `anthropic-version` 头 | `2023-06-01` |
 | `probe` | 登录自检 `models` / `none` | 预设 `models`，custom `none` |
@@ -171,10 +171,11 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 | `style` | 翻译风格：`movie` / `tv` / `anime` / `doc` / `tech` / `formal` / `casual` | `movie` |
 | `contextitems` | 最近原文+译文组数，`0..32` | `16` |
 | `contextmode` | `split` 默认；`block` 单条 user；`turns` 历史独立轮次；custom body 模板回退 block | `split` |
-| `contextchars` | 历史上下文预算（UTF-8 字节），`0..4000`；`0` 不限 | `2000` |
+| `contextchars` | 历史上下文预算，按 UTF-8 字节计；`0..4000`，`0` 不限 | `2000` |
 | `glossary` | 术语表：内联 `原文=译名,...`，或 `@路径` / `file:路径` 指向本地 UTF-8 词表；最多 32 条 | 空 |
 | `deadline` | 单条字幕总预算（毫秒），`2000..20000` | `6000` |
 | `dst` | 强制目标语言代码，绕过宿主目标语言缓存；接受 `ko`、`zh-CN` 等 | 跟随界面选择 |
+| `cache` | `1` 启用译文缓存；`0` 关闭缓存命中与写入，适合要求完全按当前上下文实时翻译的场景 | `1` |
 | `think` | `0` 关闭/降低 thinking，`1` 开启/提高；按服务商映射：DeepSeek/Moonshot/Zhipu `thinking.type`、Qwen/SiliconFlow `enable_thinking`、OpenRouter `reasoning.enabled`、vLLM/SGLang/LM Studio/custom `chat_template_kwargs`、OpenAI/Groq/xAI/Together/Mistral `reasoning_effort`（0=minimal，1=medium）、Ollama `think`；Gemini 仅在 `0` 时发送 `thinkingConfig.thinkingBudget=0`，`1` 不发送正字段 | 不发送 |
 
 注意各选项的生效范围：`body`/`headers` 只对 `custom` 生效；`path`/`auth`/`keyname`/`probe` 对任意 spec 生效；`dst` 强制覆盖界面目标语言，适合 PotPlayer 运行中切换目标语言不生效时使用；`contextmode`/`contextchars`/`glossary` 只影响上下文流水线，默认 `split`，`custom` 带 body 模板时回退 block；`think` 按服务商映射，显式设置时会覆盖预设自带的 thinking 字段，若某服务拒绝该字段请删掉它或用 `body` 模板；`version` 只对 Anthropic 请求头生效；`probe=models` 对预设生效；`custom` 显式写 `probe=models` 时会从 `.../chat/completions` 派生 `.../models`，端点不支持时 404/405 会放行；`probe_timeout` 只影响登录自检。
@@ -211,7 +212,7 @@ Harry	Harry
 - 使用 UTF-8 编码，建议无 BOM；
 - 文件在登录/确定配置时读取，修改文件后需重新登录；
 - 文件不存在、无法读取或没有有效词条时，登录会返回中文错误；
-- 路径不能包含 `;` 或 `|`（它们是配置串分隔符），建议使用绝对路径。
+- 路径不能包含 `;` 或 `|`；它们是配置串分隔符。建议使用绝对路径。
 
 文件内容最终会写入：
 
@@ -277,7 +278,7 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 | `vllm` | OpenAI 兼容 | 服务端默认模型 | 无鉴权，可留空 |
 | `sglang` | OpenAI 兼容 | 服务端默认模型 | 无鉴权，可留空 |
 | `lmstudio` | OpenAI 兼容 | 服务端默认模型 | 无鉴权，可留空 |
-| `ollama` | Ollama | 留空（需显式指定） | 无鉴权，`think:false` |
+| `ollama` | Ollama | — | 无鉴权，`think:false` |
 | `openai` | OpenAI 兼容 | `gpt-5.6-terra` | 推理模型自动降级 |
 | `deepseek` | OpenAI 兼容 | `deepseek-v4-flash` | 自动关闭思考模式 |
 | `moonshot` | OpenAI 兼容 | `kimi-k3.1-pro` | |
@@ -311,7 +312,7 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 | 译文串味或不连贯 | 默认上下文 16 组；可调 `contextitems=0..32`，暂停超过 2 分钟会自动清空。 |
 | 升级后列表目标语言仍是旧名称 | PotPlayer 会缓存插件上次的目标语言名称；在设置里重新选择一次目标语言，或重启 PotPlayer。 |
 | 译文过长/回显原文/答错语言 | 插件会拦截并重试一次；仍不合格会留空，`debug=1` 可看到 `validation failed` 原因。 |
-| 字幕里出现“- 原文/译文” | 模型复述了上下文块；新版本会判 `history_leak`，自动去掉上下文重试一次。 |
+| 字幕里出现“- 原文/译文” | 模型复述了上下文块；插件会判 `history_leak`，自动去掉上下文重试一次。 |
 
 调试示例：`deepseek:deepseek-v4-flash|debug=1`。高级选项（`path`、`body`、`minimal`、`temp` 等）可以加在任意 spec 的 `|` 之后；`custom|...|...|opts` 也支持同样的 opts 语法。
 
@@ -319,14 +320,14 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 
 - 单条字幕的输入约 100-250 tokens，输出 10-80 tokens。
 - 本机小模型 200-800 ms；国内云非推理模型 0.3-1.0 s；海外/代理 0.8-3 s；推理模型 2-30 s。
-- 同一上下文下重复台词可命中缓存；上下文默认 16 组原文+译文，可用 `contextitems=0..32` 调整（源码上限 `MAX_HISTORY=32`）；切换播放文件会自动清上下文和缓存。
+- 同一配置下重复台词可命中缓存，不再要求当前上下文一致；上下文默认 16 组原文+译文，可用 `contextitems=0..32` 调整；`cache=0` 可关闭缓存；切换播放文件会自动清上下文和缓存。
 - 单条字幕默认 6 秒总预算；预算内才会继续重试，避免拖住后续字幕。
 - 每 1000 条字幕成本量级：¥0.01-0.5，随模型价差很大。
 
 ## 隐私与安全
 
 - 插件只向你在配置里填写的 URL 发请求，没有遥测、没有硬编码第三方服务。
-- API Key 通过 PotPlayer 的 `HostSaveString` 存在本地（**非加密**）；共享电脑上建议用完 `ServerLogout`（设置里清空）。
+- API Key 通过 PotPlayer 的 `HostSaveString` 存在本地，**非加密**；共享电脑上建议用完 `ServerLogout`。
 - `debug=1` 时打印的 URL 会把 Key（含 URL 编码后的形式）替换成 `****`；请求体里只有字幕和提示词，不含 Key。
 - 优先用请求头鉴权；`auth=query` 会把 Key 放进 URL，可能被代理/网关日志记录。
 - 请求使用 `NoCookie=true`，不会带上 PotPlayer 为同域保存的 Cookie。
@@ -334,14 +335,14 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 ## 已知限制
 
 - 同步 HTTP：一次只能翻译一条字幕，没有流式输出（PotPlayer 插件接口只接受一次性返回值）。
-- 自定义接口只支持 JSON 请求/响应；表单编码接口（如 DeepL 表单版）请用官方插件。
+- 自定义接口只支持 JSON 请求/响应；表单编码接口请用官方插件，例如 DeepL 表单版。
 - `path` 下标只支持单层 0-9，不支持 `[10]` 和多层嵌套下标。
-- 不使用线程/timer；单条字幕受 `deadline` 总预算限制（默认 6 s，最大 20 s），慢模型可能来不及返回。
+- 不使用线程/timer；单条字幕受 `deadline` 总预算限制，慢模型可能来不及返回。
 - 82 种语言是常用集，不是完整 ISO 列表；可在源码语言表里扩展。
-- `contextitems` 最多 32 组；风格只通过提示词模板切换，不做自动题材识别。
+- `contextitems` 最多 32 组；风格只通过提示词模板切换，不做自动题材识别。缓存按“配置 + 原文”命中，可能复用不同语境下的旧译文；可用 `cache=0` 关闭。
 - 不做自动术语提取/整片术语表；需要统一专名时，用 `style` + 上下文维持一致。
 - 请求前会剔除 JSON 不允许的 C0 控制字符（`\b`/`\f` 等），不转义保留。
-- `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`（spec 语法无转义）。
+- `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`。
 - 插件尚未在全部 PotPlayer 版本上实机验证，兼容性记录见 `docs/verification.md`。
 
 ## 文档
@@ -359,20 +360,18 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 
 ## 开发与验证
 
-AngelScript 无法在本机直接执行，本项目按三层可复跑验证（另有内部独立审查；本机检查需要 Python 3.10 或更高；CI 使用 3.12）：
+AngelScript 无法在本机直接执行。本项目按三层验证，另有内部独立审查。本机检查需要 Python 3.10 或更高，CI 使用 3.12：
 
 ```powershell
 # 1. 静态检查：括号配平、入口点、语言表/预设表长度、Host API 是否真实存在
 python -m unittest tests.test_static -v
 
-# 2. 契约测试：py_compile + mock 冒烟 + unittest（236 用例，含静态检查）
+# 2. 契约测试：py_compile + mock 冒烟 + unittest（237 用例，含静态检查）
 powershell -ExecutionPolicy Bypass -File tests\run_tests.ps1
 # PATH 中没有 python 时加 -Python <path>
 
 # 3. 实机：复制插件 → 重启 PotPlayer → 登录 → 播放带字幕视频
 ```
-
-`tests/test_static.py` 默认使用仓库内的 `docs/api-signatures.txt`（从 `PotPlayer64.dll` 提取的 104 条签名）校验 Host API；在装有 PotPlayer 的 Windows 上还会尝试自动探测 `Extension\api.txt`。CI（`.github/workflows/ci.yml`）在 Windows runner 上运行同样的检查。
 
 验证证据与未覆盖范围见 [verification](docs/verification.md)，文案约定见 [style](docs/style.md)，测试布局见 [tests/README.md](tests/README.md)。
 
@@ -383,4 +382,4 @@ powershell -ExecutionPolicy Bypass -File tests\run_tests.ps1
 
 ## 许可
 
-[MIT](LICENSE) 版权所有 (c) 2026 RedHeartSecretMan
+[MIT](LICENSE)

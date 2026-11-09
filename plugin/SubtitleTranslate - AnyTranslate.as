@@ -105,6 +105,7 @@ array<string> g_cache_vals;
 array<uint> g_cache_ticks;
 int CACHE_MAX = 64;
 int CACHE_TTL_MS = 600000;
+bool g_cache_enabled = true;
 string g_context_key = "";
 string g_cache_scope = "";
 
@@ -825,6 +826,7 @@ string ParseSpec(const string &in specIn)
     string contextModeOpt = "";
     string contextCharsOpt = "";
     string glossaryOpt = "";
+    string cacheOpt = "";
     bool isCustom = false;
 
     // ---- 拆出 endpoint / model / opts ----
@@ -906,6 +908,7 @@ string ParseSpec(const string &in specIn)
         else if (k == "contextmode") contextModeOpt = v;
         else if (k == "contextchars") contextCharsOpt = v;
         else if (k == "glossary") glossaryOpt = v;
+        else if (k == "cache") cacheOpt = v;
         else if (k == "deadline") deadlineOpt = v;
         else if (k == "dst") dstOpt = v;
         else if (k == "think") thinkOpt = v;
@@ -1021,6 +1024,14 @@ string ParseSpec(const string &in specIn)
         return "contextmode 只能是 block / split / turns";
     }
     int contextChars = contextCharsOpt.empty() ? 2000 : ParseBoundedInt(contextCharsOpt, 2000, 0, 4000);
+    bool cacheEnabled = true;
+    if (!cacheOpt.empty())
+    {
+        string cv = cacheOpt.MakeLower();
+        if (cv == "0" || cv == "false" || cv == "off") cacheEnabled = false;
+        else if (cv == "1" || cv == "true" || cv == "on") cacheEnabled = true;
+        else return "cache 只能是 0/1/true/false";
+    }
 
     array<string> glossarySrc;
     array<string> glossaryDst;
@@ -1091,6 +1102,7 @@ string ParseSpec(const string &in specIn)
     g_context_limit = contextLimit;
     g_context_char_limit = contextChars;
     g_context_mode = contextMode;
+    g_cache_enabled = cacheEnabled;
     g_glossary_src.resize(0);
     g_glossary_dst.resize(0);
     for (int gi = 0; gi < glossarySrc.size(); gi++)
@@ -1231,15 +1243,9 @@ string BuildGlossaryText()
 
 string CacheKey(const string &in text)
 {
-    string key = g_cache_scope + "\n" + text;
-    // 上下文感知翻译的结果依赖最近台词；把实际选中的历史对放进 key，
-    // 避免同一句台词在不同语境下直接复用旧译文。
-    for (int i = 0; i < g_ctx_src_sel.size(); i++)
-    {
-        key += "\n<CTX:" + formatInt(i) + ">" + g_ctx_src_sel[i] +
-               "\n<OUT:" + formatInt(i) + ">" + g_ctx_dst_sel[i];
-    }
-    return key;
+    // 缓存只按静态配置 + 原文区分。历史上下文仍用于 prompt，
+    // 但不参与缓存 key；否则每句都会因上下文变化而 miss。
+    return g_cache_scope + "\n" + text;
 }
 
 int CacheFindKey(const string &in key)
@@ -1264,11 +1270,13 @@ int CacheFindKey(const string &in key)
 
 int CacheFind(const string &in text)
 {
+    if (!g_cache_enabled) return -1;
     return CacheFindKey(CacheKey(text));
 }
 
 void CachePut(const string &in text, const string &in val)
 {
+    if (!g_cache_enabled) return;
     string key = CacheKey(text);
     int i = CacheFindKey(key);
     if (i >= 0)
@@ -3016,7 +3024,7 @@ bool PrepareTranslation(string Text, string SrcLang, string DstLang,
         outResult = converted; return false;
     }
 
-    int hit = CacheFind(raw);
+    int hit = g_cache_enabled ? CacheFind(raw) : -1;
     if (hit >= 0)
     {
         g_stat_cache_hits++;
@@ -3030,7 +3038,7 @@ bool PrepareTranslation(string Text, string SrcLang, string DstLang,
     job.selfTest = selfTest;
     job.realSrc = realSrc;
     job.dstLabel = dstLabel;
-    g_stat_cache_misses++;
+    if (g_cache_enabled) g_stat_cache_misses++;
     return true;
 }
 

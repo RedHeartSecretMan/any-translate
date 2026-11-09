@@ -94,6 +94,7 @@ OPTS_KEYS = (
     "contextmode",
     "contextchars",
     "glossary",
+    "cache",
     "headers",
 )
 
@@ -248,6 +249,7 @@ class Spec:
     version: str = DEFAULT_ANTHROPIC_VERSION
     minimal: bool = False
     debug: bool = False
+    cache: bool = True
     probe: str = "none"
     probe_timeout: int = 10000
     style: str = DEFAULT_STYLE
@@ -721,6 +723,13 @@ def _finish_spec(
     if context_mode not in CONTEXT_MODES:
         return False, _err("bad_opts", "contextmode 只能是 block / split / turns")
     context_chars = _parse_context_chars(opts.get("contextchars"))
+    cache_raw = (opts.get("cache") or "").strip().lower()
+    if cache_raw in ("", "1", "true", "on"):
+        cache = True
+    elif cache_raw in ("0", "false", "off"):
+        cache = False
+    else:
+        return False, _err("bad_opts", "cache 只能是 0/1/true/false")
     glossary = _parse_glossary(opts.get("glossary"))
     headers = (opts.get("headers") or "").strip()
     if is_custom:
@@ -745,6 +754,7 @@ def _finish_spec(
         version=version,
         minimal=_flag(opts.get("minimal")),
         debug=(_flag(opts.get("debug")) or debug_raw == "2"),
+        cache=cache,
         probe=probe,
         probe_timeout=probe_timeout,
         style=style,

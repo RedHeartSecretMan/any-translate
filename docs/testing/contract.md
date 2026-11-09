@@ -72,7 +72,7 @@ Python 解释器使用 PATH 中的 `python`（3.10+，契约测试只用标准�
 spec   := preset [":" model] ["|" opts]
         | "custom" "|" url ["|" model ["|" opts]]
 opts   := kv (";" kv)*        kv := key "=" value
-keys   := path | auth | keyname | body | headers | temp | max_tokens | probe | probe_timeout | debug | version | minimal | style | contextitems | contextmode | contextchars | glossary | deadline | dst | think
+keys   := path | auth | keyname | body | headers | temp | max_tokens | probe | probe_timeout | debug | version | minimal | style | contextitems | contextmode | contextchars | glossary | deadline | dst | think | cache
 auth   := bearer | x-api-key | query | none
 ```
 
@@ -326,6 +326,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 | D-31 | 404 文案 | `ErrorHint` 404 = “接口地址或模型不存在”；ref 稳定文案含同一短语 | aligned |
 | D-32 | style/contextitems/deadline | `style` 默认 `movie`，非法值报 `bad_opts`；`contextitems` 默认 16、夹到 0..32；`deadline` 默认 6000、夹到 2000..20000；三者都参与运行时行为，不改变 HTTP 协议 | aligned |
 | D-33 | 译文质量门 | `validate_translation` 返回 `empty` / `history_leak` / `wrong_script` / `echo` / `traditional` / `simplified` / `too_long`；`validation_reason_zh` 提供重试提示中文原因；拉丁短名/缩写放行 | ref abstraction |
+| D-35 | 缓存身份 | key = 静态配置 + 原文，不含当前历史；`cache=0` 关闭命中/写入；TTL 10 分钟、LRU 64 条 | aligned |
 | D-34 | 非对白过滤 | 纯符号/数字/音乐符号行由 `is_non_dialogue_text` 判定，本地原样返回，不请求 API | ref abstraction |
 
 ## 7. 人工交叉核对清单（`.as` ↔ tests）
@@ -415,4 +416,4 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 最后更新：2026-11-09（0.1.0：style/contextitems/contextmode/contextchars/deadline、
 源语言归一化、目标脚本策略、413/408/网络降级、质量门、非对白过滤；同时回归
 SafeUrl 编码脱敏 / auth=query 归一化 / MaskKey <16 / ErrorHint 404 / JsonEscape
-剔除 C0；236 用例全部通过，`run_tests.ps1` 一键 PASS）。
+剔除 C0；237 用例全部通过，`run_tests.ps1` 一键 PASS）。

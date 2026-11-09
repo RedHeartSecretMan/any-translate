@@ -338,6 +338,16 @@ class PluginStaticTest(unittest.TestCase):
         self.assertEqual(pairs.get("這"), "这")
         self.assertEqual(pairs.get("們"), "们")
 
+    def test_cache_key_ignores_context(self) -> None:
+        """Cache identity must stay config + raw text, not selected history."""
+        text = DEFAULT_SCRIPT.read_text(encoding="utf-8")
+        start = text.index("string CacheKey(")
+        end = text.index("int CacheFindKey", start)
+        body = text[start:end]
+        self.assertNotIn("g_ctx_src_sel", body)
+        self.assertNotIn("g_ctx_dst_sel", body)
+        self.assertIn("g_cache_scope", body)
+
     def test_language_tables_defined(self) -> None:
         """Guard against a referenced language table being deleted while its use remains."""
         text = DEFAULT_SCRIPT.read_text(encoding="utf-8")
