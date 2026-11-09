@@ -338,6 +338,25 @@ class PluginStaticTest(unittest.TestCase):
         self.assertEqual(pairs.get("這"), "这")
         self.assertEqual(pairs.get("們"), "们")
 
+    def test_language_tables_defined(self) -> None:
+        """Guard against a referenced language table being deleted while its use remains."""
+        text = DEFAULT_SCRIPT.read_text(encoding="utf-8")
+        for name in ("L_CODE", "L_LABEL", "L_PROMPT", "LATIN_LANG_CODES"):
+            self.assertRegex(
+                text,
+                rf"array<string>\s+{name}\s*=",
+                f"{name} must be defined in the plugin",
+            )
+
+    def test_host_lang_writeback_in_translate(self) -> None:
+        """AngelScript &in object args are copied; write-back must stay in host-called Translate."""
+        text = DEFAULT_SCRIPT.read_text(encoding="utf-8")
+        start = text.index("string Translate(")
+        end = text.index("// 登录 / 初始化 / 语言列表", start)
+        body = text[start:end]
+        self.assertIn('SrcLang = "UTF8";', body)
+        self.assertIn('DstLang = "UTF8";', body)
+
     def test_pipeline_contract(self) -> None:
         text = DEFAULT_SCRIPT.read_text(encoding="utf-8")
         for needle in (

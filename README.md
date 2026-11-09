@@ -44,16 +44,17 @@ any-translate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译
 | 17 个预设 + custom | 换服务商/模型只改登录框里的一行配置 |
 | 上下文翻译 | 默认保留最近 16 组原文+译文作为语境，`contextitems=0..32` 可调，提升指代、术语与语气一致性 |
 | 场景风格 | `style=movie/tv/anime/doc/tech/formal/casual`，按题材切换提示词模板 |
-| 译文质量门 | 回显原文、目标文字脚本、繁简不匹配、超长译文会被拦截并重试一次，失败宁可不显示；中文目标会额外拒绝明显日文/韩文 |
+| 译文质量门 | 回显原文、历史串线、目标脚本错误、繁简不匹配、超长译文会被拦截并重试一次，失败宁可不显示；`zh-TW` 变体不匹配可能先额外请求一次脚本转换；中/日/韩目标拒绝明显串脚本，`sr` 允许拉丁或西里尔 |
 | 中文简繁 | 目标简体且原文是中文时直接逐字转换，避免模型保留繁体或改写语义 |
 | 实时预算 | 单条字幕默认 6 s 总预算，预算内才继续降级/质量重试；`deadline=2000..20000` 可调；413 会尝试无上下文降级 |
 | 非对白过滤 | 纯符号、纯数字、音乐符号行不请求 API，原样返回 |
-| 缓存去重 | 相同台词命中缓存（最近 64 条），避免重复请求与计费 |
+| 缓存去重 | 同一上下文下的相同台词命中缓存（最近 64 条），避免重复请求与计费 |
 | 登录自检 | 按协议探测模型列表，校验 Key 与模型名，失败给出可操作提示 |
 | 自动降级 | 服务端拒绝 `temperature` / `max_tokens` 时改用最小请求体并记住 |
-| 诊断模式 | `debug=1` 查看状态码、长度与耗时摘要；`debug=2` 才输出请求/响应正文 |
+| 诊断模式 | `debug=1` 查看状态码、长度与耗时摘要及 requests/cache/retries/invalid 统计；`debug=2` 才输出请求/响应正文 |
 | 82 种语言 | 插件返回语言代码，菜单名称由 PotPlayer 本地化显示；提示词映射为双语语言名 |
 | 上下文流水线 | 默认 `split`；规则进 system，背景信息/待翻译文本分离；支持 `block`/`turns` 切换 |
+| 源语言归一 | `English`/`en` 归一为同一 source key；`UTF8`/`Auto` 沿用上次真实源语言，真实源语言变化时清上下文 |
 | 隐私默认 | 无遥测；Key 由 PotPlayer 的 `HostSaveString` 保存在本机（非加密） |
 
 ## 快速开始
@@ -174,9 +175,9 @@ custom|<endpoint_url>|<model>|[opts]        例：custom|https://api.example.com
 | `glossary` | 术语表：内联 `原文=译名,...`，或 `@路径` / `file:路径` 指向本地 UTF-8 词表；最多 32 条 | 空 |
 | `deadline` | 单条字幕总预算（毫秒），`2000..20000` | `6000` |
 | `dst` | 强制目标语言代码，绕过宿主目标语言缓存；接受 `ko`、`zh-CN` 等 | 跟随界面选择 |
-| `think` | `0` 关闭 thinking，`1` 开启；按服务商发送对应字段（DeepSeek/Moonshot/Zhipu 的 `thinking.type`、Qwen/SiliconFlow 的 `enable_thinking`、OpenRouter 的 `reasoning.enabled`、vLLM/SGLang/LM Studio/custom 的 `chat_template_kwargs`、OpenAI/Groq/xAI/Together/Mistral 的 `reasoning_effort`、Ollama 的 `think`、Gemini 的 `thinkingConfig`） | 不发送 |
+| `think` | `0` 关闭/降低 thinking，`1` 开启/提高；按服务商映射：DeepSeek/Moonshot/Zhipu `thinking.type`、Qwen/SiliconFlow `enable_thinking`、OpenRouter `reasoning.enabled`、vLLM/SGLang/LM Studio/custom `chat_template_kwargs`、OpenAI/Groq/xAI/Together/Mistral `reasoning_effort`（0=minimal，1=medium）、Ollama `think`；Gemini 仅在 `0` 时发送 `thinkingConfig.thinkingBudget=0`，`1` 不发送正字段 | 不发送 |
 
-注意各选项的生效范围：`body`/`headers` 只对 `custom` 生效；`path`/`auth`/`keyname`/`probe` 对任意 spec 生效；`dst` 强制覆盖界面目标语言，适合 PotPlayer 运行中切换目标语言不生效时使用；`contextmode`/`contextchars`/`glossary` 只影响上下文流水线，默认 `split`，`custom` 带 body 模板时回退 block；`think` 按服务商映射，显式设置时会覆盖预设自带的 thinking 字段，若某服务拒绝该字段请删掉它或用 `body` 模板；`version` 只对 Anthropic 请求头生效；`probe=models` 对预设生效；`custom` 显式写 `probe=models` 时会从 `.../chat/completions` 派生 `.../models`，端点不支持时 404/405 会放行；`probe_timeout` 只影响登录自检。`headers` 仅对 custom 生效。
+注意各选项的生效范围：`body`/`headers` 只对 `custom` 生效；`path`/`auth`/`keyname`/`probe` 对任意 spec 生效；`dst` 强制覆盖界面目标语言，适合 PotPlayer 运行中切换目标语言不生效时使用；`contextmode`/`contextchars`/`glossary` 只影响上下文流水线，默认 `split`，`custom` 带 body 模板时回退 block；`think` 按服务商映射，显式设置时会覆盖预设自带的 thinking 字段，若某服务拒绝该字段请删掉它或用 `body` 模板；`version` 只对 Anthropic 请求头生效；`probe=models` 对预设生效；`custom` 显式写 `probe=models` 时会从 `.../chat/completions` 派生 `.../models`，端点不支持时 404/405 会放行；`probe_timeout` 只影响登录自检。
 
 提示词采用官方模板的分段方式：任务与硬性要求放在 system；历史放进 `【背景信息】`；当前句放进 `【待翻译文本】`；术语使用 `A→B` 的 `【术语对照】`。这样既保留影视字幕规则，又避免把所有内容混成一大段文本。
 
@@ -239,7 +240,7 @@ Harry	Harry
 deepseek:deepseek-v4-flash|style=anime;contextitems=8;deadline=5000
 ```
 
-`deadline` 是单条字幕的总预算（毫秒），默认 6000。预算用完后不再发起 400 降级、空响应重试、429/5xx 重试或质量重试；慢模型/推理模型可调高到 20000。
+`deadline` 是单条字幕的总预算（毫秒），默认 6000。预算用完后不再发起 400 降级、413 无上下文重试、空响应重试、429/5xx 重试、408/网络短重试或质量重试；慢模型/推理模型可调高到 20000。
 
 风格/上下文变化会自动清空当前上下文与缓存，避免把旧风格的译文当成参考。
 
@@ -318,7 +319,7 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 
 - 单条字幕的输入约 100-250 tokens，输出 10-80 tokens。
 - 本机小模型 200-800 ms；国内云非推理模型 0.3-1.0 s；海外/代理 0.8-3 s；推理模型 2-30 s。
-- 缓存可挡掉重复台词；上下文默认 16 组原文+译文，可用 `contextitems=0..32` 调整（源码上限 `MAX_HISTORY=32`）；切换播放文件会自动清上下文和缓存。
+- 同一上下文下重复台词可命中缓存；上下文默认 16 组原文+译文，可用 `contextitems=0..32` 调整（源码上限 `MAX_HISTORY=32`）；切换播放文件会自动清上下文和缓存。
 - 单条字幕默认 6 秒总预算；预算内才会继续重试，避免拖住后续字幕。
 - 每 1000 条字幕成本量级：¥0.01-0.5，随模型价差很大。
 
@@ -327,7 +328,6 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 - 插件只向你在配置里填写的 URL 发请求，没有遥测、没有硬编码第三方服务。
 - API Key 通过 PotPlayer 的 `HostSaveString` 存在本地（**非加密**）；共享电脑上建议用完 `ServerLogout`（设置里清空）。
 - `debug=1` 时打印的 URL 会把 Key（含 URL 编码后的形式）替换成 `****`；请求体里只有字幕和提示词，不含 Key。
-- 登录框回显 Key 时，长度不足 16 位只显示 `****`，否则只显示前 4 位与后 4 位。
 - 优先用请求头鉴权；`auth=query` 会把 Key 放进 URL，可能被代理/网关日志记录。
 - 请求使用 `NoCookie=true`，不会带上 PotPlayer 为同域保存的 Cookie。
 
@@ -365,7 +365,7 @@ AngelScript 无法在本机直接执行，本项目按三层可复跑验证（�
 # 1. 静态检查：括号配平、入口点、语言表/预设表长度、Host API 是否真实存在
 python -m unittest tests.test_static -v
 
-# 2. 契约测试：py_compile + mock 冒烟 + unittest（234 用例，含静态检查）
+# 2. 契约测试：py_compile + mock 冒烟 + unittest（236 用例，含静态检查）
 powershell -ExecutionPolicy Bypass -File tests\run_tests.ps1
 # PATH 中没有 python 时加 -Python <path>
 

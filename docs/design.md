@@ -18,6 +18,23 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 - 在不增加协议的前提下按题材切换提示词风格，并控制前文原文+译文窗口；
 - 单文件分发，复制进 `Extension\Subtitle\Translate` 即可用。
 
+### 1.1 单文件内的阶段划分
+
+`Translate` 只负责串联；具体阶段在同一个 `.as` 文件内拆成函数：
+
+```text
+Translate
+  ├─ PrepareTranslation          过滤、配置、语言、上下文、缓存、中文直转
+  ├─ PrepareTranslationRequest   prompt / URL / headers / body
+  ├─ ExecuteTranslationRequest   HTTP + 400/413/empty/429/network 重试
+  ├─ FinalizeTranslationRequest  响应清洗后的变体修正、质量门、质量重试
+  └─ CommitTranslation           失败处理、缓存、历史、返回
+```
+
+请求上下文主要放在 `TranslationJob`；HTTP 状态码/响应体等仍由 `SendOnce` 的既有全局状态维护。
+`SrcLang`/`DstLang` 的 `UTF8` 写回必须留在 `Translate` 内：AngelScript 的
+非 const `&in` 对象参数在脚本调用点按副本传递，helper 内赋值不会回写宿主参数。
+
 ## 2. 设计取舍
 
 | 取舍 | 选择 | 原因 |
@@ -47,6 +64,7 @@ PotPlayer 的实时字幕翻译通过 `Extension\Subtitle\Translate\` 下的 Ang
 | `HostIncTimeOut` | 单次请求的脚本超时预算（翻译按 `deadline`，登录自检按 `probe_timeout`，默认 10 s） | api.txt:42；签名 `void HostIncTimeOut(int)` |
 | `HostLoadString` / `HostSaveString` | 持久化配置（spec、Key） | api.txt:222-226；`bool HostSaveString(const string &in, const string &in)` |
 | `HostGetTickCount` | 检测长时间暂停，重置上下文 | api.txt:39；`uint HostGetTickCount()` |
+| `HostFileExist` / `HostFileOpen` / `HostFileLength` / `HostFileRead` / `HostFileClose` | 读取 `glossary=@路径` / `file:路径` 的本地 UTF-8 术语表 | api.txt 文件 API；`ReadGlossaryFile` 使用 |
 | `HostGetPlayingFileName` / `HostGetPlayingTitle` | 检测播放文件切换，清理上下文和缓存；文件名不可用时用标题兜底 | api.txt:316/319；`string HostGetPlayingFileName()`、`string HostGetPlayingTitle()` |
 | `HostOpenConsole` / `HostPrintUTF8` | `debug=1` 时输出诊断日志（Key 脱敏） | api.txt:15-22 |
 | `HostUrlEncode` | `SafeUrl` 脱敏时同时匹配 URL 编码后的 Key | api.txt 随扩展包分发 |
@@ -173,7 +191,7 @@ custom|<endpoint_url>|<model>|[opts]       例：custom|https://api.example.com/
 | `glossary` | 术语表：内联 `原文=译名,...`，或 `@路径` / `file:路径` 本地词表；最多 32 条 | 空 |
 | `deadline` | 单条字幕总预算（毫秒），`2000..20000` | `6000` |
 | `dst` | 强制目标语言代码（如 `ko`、`zh-CN`），绕过宿主目标语言缓存 | 跟随界面选择 |
-| `think` | `0`/`1` 按服务商发送 thinking 开关：DeepSeek/Moonshot/Zhipu `thinking.type`，Qwen/SiliconFlow `enable_thinking`，OpenRouter `reasoning.enabled`，本地/custom `chat_template_kwargs`，OpenAI/Groq/xAI/Together/Mistral `reasoning_effort`，Ollama `think`，Gemini `thinkingConfig` | 不发送 |
+| `think` | `0`/`1` 按服务商发送 thinking 开关：DeepSeek/Moonshot/Zhipu `thinking.type`，Qwen/SiliconFlow `enable_thinking`，OpenRouter `reasoning.enabled`，本地/custom `chat_template_kwargs`，OpenAI/Groq/xAI/Together/Mistral `reasoning_effort`（0=minimal，1=medium），Ollama `think`；Gemini 仅 `0` 发送 `thinkingConfig.thinkingBudget=0`，`1` 不发送正字段 | 不发送 |
 
 示例：
 
@@ -193,9 +211,10 @@ custom|https://my-gateway/v1/chat/completions|my-model|path=result.translation;a
 默认 `movie`。模板内容必须让模型"感觉像同一部片子的字幕"，而不是解释剧情。
 
 `contextitems` 控制 `g_history_src` / `g_history_dst` 的窗口：成功翻译后成对入栈，
-prompt 同时给出最近 N 组原文与译文；`0` 关闭。窗口上限 32，调小只影响下一次
-prompt，调大不会复活已丢弃的历史。`style`/`contextitems`、provider/model/dst
-或真实源语言变化会清空上下文与缓存，避免跨风格或跨语言污染。
+prompt 同时给出最近 N 组原文与译文；`0` 关闭。窗口上限 32。`contextitems` 是
+上下文身份的一部分，修改后会清空历史与缓存，所以调小不会保留旧窗口，调大也不会
+复活已丢弃的历史。`style`/`contextitems`、provider/model/dst 或真实源语言变化都会
+清空上下文与缓存，避免跨风格或跨语言污染。
 
 `deadline` 是单条字幕总预算：首次请求与后续降级/质量重试共享这一预算，
 剩余预算不足时不再发起重试，避免拖住后续字幕。纯符号/数字/音乐符号行
@@ -204,6 +223,10 @@ prompt，调大不会复活已丢弃的历史。`style`/`contextitems`、provide
 ## 6. 适配器实现
 
 ### 6.1 请求
+
+默认 `contextmode=split`：system 承载固定规则，user 承载背景/术语/当前句；下面的单条
+`messages:[{role:"user",...}]` 展示的是 `block` / custom body 模板的兼容形态。
+`split` / `turns` 的实际消息结构由 `BuildMessagesJson` / `BuildBodyPipeline` 决定。
 
 - **openai**：`POST {base}/chat/completions`，头 `Content-Type: application/json`、
   `Authorization: Bearer <key>`；体
@@ -216,7 +239,7 @@ prompt，调大不会复活已丢弃的历史。`style`/`contextitems`、provide
   `{model, max_tokens, messages:[{role:"user",content:prompt}]}`（`max_tokens` 必填，默认 1024）。
 - **gemini**：`POST {base}/v1beta/models/{model}:generateContent`，头
   `x-goog-api-key: <key>`（不把 Key 放 URL）；体
-  `{contents:[{parts:[{text:prompt}]}], generationConfig:{temperature, thinkingConfig:{thinkingBudget:0}}}`。
+  `{contents:[{parts:[{text:prompt}]}], generationConfig:{temperature, thinkingConfig:{thinkingBudget:0}}}`（仅默认/`think=0`；`think=1` 不发正字段）。
 - **ollama**：`POST {base}/api/chat`；体
   `{model, messages:[{role:"user",content:prompt}], stream:false, think:false, options:{temperature}}`。
 - **custom**：`body` 模板优先；否则按 OpenAI 兼容体。
@@ -276,8 +299,9 @@ JSON 字符串一律经 `JsonEscape`：先剔除 JSON 不允许的 C0 控制字�
 | 429 / 5xx | 预算内重试 1 次，优先使用 `Retry-After`，否则 400/600ms 退避；仍失败则静默 |
 | 413 请求体过大 | 预算内去掉历史上下文重试 1 次；仍失败则静默 |
 | 网络错误 / 408 | 剩余预算 >1500 ms 时短退避后重试 1 次；仍失败则静默 |
-| 400 且错误文本提示参数不支持 | 预算内用最小体（仅 model + messages + stream:false）重试 1 次；成功后本次会话固定用最小体。错误文本为空或不含参数关键词时不降级 |
+| 400 且错误文本提示参数不支持 | 预算内用最小体（model + messages + stream:false，另有显式 think 字段时保留）重试 1 次；成功后本次会话固定用最小体。错误文本为空或不含参数关键词时不降级 |
 | 200 但译文为空 | 预算内用最小体重试 1 次（常见于思考内容占满预算）；若最小体与当前体相同则跳过 |
+| `zh-TW` 变体不匹配 | 预算内额外请求一次“简转繁”脚本转换；转换后仍不匹配再进入质量门，质量重试最多一次 |
 | 译文回显原文 / 目标文字脚本缺失 / 中英日韩明显串脚本 / 严重超长 | 预算内用更强硬提示词重试 1 次；仍不合格则本次返回空串，不写缓存 |
 | 剩余预算不足 | 不再发起降级/重试；直接按当前失败结果处理，避免阻塞下一条字幕 |
 | JSON 解析失败 / 路径不存在 / 译文为空（HTTP 200） | 用最小体重试 1 次；仍失败则静默返回空串 |
@@ -285,18 +309,18 @@ JSON 字符串一律经 `JsonEscape`：先剔除 JSON 不允许的 C0 控制字�
 | 登录自检失败 | 置运行期"已登出"状态，`Translate` 直接返回空串，避免用未验证配置逐行请求；测试按钮显示未登录提示 |
 
 超时：翻译每次请求前按剩余预算调用 `HostIncTimeOut`，单条字幕总预算默认 6 s；
-登录自检默认 10 s（`probe_timeout=1000..60000`）。单行通常 1-3 次请求，质量重试最多再加 1 次，且必须仍在预算内。
+登录自检默认 10 s（`probe_timeout=1000..60000`）。单行至少 1 次请求；400 / 413 / 200 空响应 / 429·5xx / 408·网络各自最多触发 1 次降级重试，质量失败最多再加 1 次；所有请求共享同一条 `deadline`。
 Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预热或调高 `deadline`。
 
 ## 8. 性能与成本
 
 - **上下文窗口**：保留最近 16 组原文+译文（`contextitems=0..32`），按 UTF-8 字节预算截断，作为"仅供参考、禁止翻译"的语境块；
-- **缓存**：最近 64 条，按 provider/model/目标/风格/上下文指纹及 custom `headers`/扩展字段区分，LRU + 10 分钟 TTL；同上下文下的重复台词命中后直接返回；
+- **缓存**：最近 64 条，按 provider/model/base/真实源语言/目标/风格/上下文指纹、vendor `path`、custom `headers`/`body`/扩展字段、温度/max_tokens/think/glossary 区分；LRU + 10 分钟 TTL；同上下文下的重复台词命中后直接返回；
 - **暂停重置**：距上次翻译超过 120 秒清空上下文与缓存；
 - **实时预算**：单条字幕默认 6 s（`deadline=2000..20000`），预算内才继续重试；
 - **非对白**：纯符号/数字/音乐行本地原样返回，不产生请求；
 - **提示词**：system 任务与硬性要求 + user `【背景信息】`/`【术语对照】`/`【待翻译文本】`；
-- **质量门**：回显、目标文字脚本、超长三类本地校验，坏结果最多再请求一次；
+- **质量门**：empty、history_leak、wrong_script、echo、traditional/simplified、too_long 本地校验，坏结果最多再请求一次；
 - **单次延迟**：本机小模型 200-800 ms；云端 `gpt-5.6` / `gemini-3.5-flash` 级 300-1200 ms；
   推理模型 2-30 s。这是同步 HTTP 方案的物理下限，文档中如实说明。
 
@@ -305,7 +329,7 @@ Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预
 1. **静态检查**（`tests/test_static.py`）：括号/花括号配平、14 个入口点齐全、
    三张语言表长度一致且无重复、`STYLE_IDS`/`STYLE_RULES` 等长、所有 `Host*` 调用都在二进制签名表内；
 2. **契约测试**（`tests/`，Python 参考实现 + mock 服务）：校验 spec 解析、
-   `style`/`contextitems`/`deadline`、非对白过滤、四种协议的 URL/头/体构造、
+   `style`/`contextitems`/`deadline`、非对白过滤、五种协议（四种内置协议 + custom）的 URL/头/体构造、
    响应路径解析、目标语言规则与质量门；说明见 `docs/testing/contract.md`；
 3. **独立审查**（内部记录，未随包发布）：逐 API 对照二进制签名与官方在用插件，
    覆盖语法、逻辑、安全、兼容性、行为回归；
@@ -336,11 +360,11 @@ Ollama（本机）首次加载模型可能较慢，可先手动 `ollama run` 预
 7. `body` 值不能含 `;`，custom 的 URL / model / body 不能含 `|`，无转义机制；
 8. 质量门是本地启发式：拉丁目标能识别“明显返回 CJK”的情况，但不能可靠区分
    “答成另一种拉丁语言”；CJK/阿拉伯/西里尔等脚本只把“明显是拉丁语句”的整句
-   判错（缩写、短专名放行），不区分简繁或具体语种；
+   判错（缩写、短专名放行）；中文简繁只覆盖常见字对，不是完整 OpenCC。
 9. 非对白判断只覆盖纯数字/ASCII 标点/常见音乐符号；emoji 或复杂符号仍可能
    触发一次请求；
 10. 源语言来自宿主；插件的 `NormalizeSourceKey` 只做代码/标签归一，不自动识别源语言；
-11. 目标脚本策略只覆盖中文/日文/韩文的明显串脚本问题，不宣称完整脚本检测；
+11. 目标脚本策略只覆盖中文/日文/韩文的明显串脚本问题，`sr` 允许拉丁或西里尔；不宣称完整脚本检测；
 12. 413 降级会去掉上下文后重试一次；网络错误/408 只在 deadline 剩余时短重试一次；
 13. `deadline` 限制的是重试与脚本超时预算，不能取消已经发出的同步 HTTP 请求；
     首次请求本身仍可能接近 `deadline` 才返回。

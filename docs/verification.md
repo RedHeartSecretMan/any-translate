@@ -17,11 +17,15 @@
 
 ```text
 python -m unittest tests.test_static -v
+→ test_host_lang_writeback_in_translate ... ok
+→ test_language_tables_defined ... ok
+→ test_pipeline_contract ... ok
 → test_plugin_contract ... ok
-→ Ran 1 test / OK
+→ test_zh_t2s_mapping_integrity ... ok
+→ Ran 5 tests / OK
 ```
 
-覆盖：括号/花括号配平、14 个入口点齐全、语言表 `L_CODE/L_LABEL/L_PROMPT` 长度一致且无重复、
+覆盖：括号/花括号配平、14 个入口点齐全、`Translate` 内宿主张量写回、语言表 `L_CODE/L_LABEL/L_PROMPT/LATIN_LANG_CODES` 定义与长度一致且无重复、
 `P_*` 预设表与 `P_ID` 等长、本机预设位于表头且模型留空、`STYLE_IDS`/`STYLE_RULES` 等长且无重复、
 `GetTitle` 语言标签顺序、`Host*` 调用全部存在于签名列表、保留字 `out` 仅允许出现在
 `&out` 参数或字面量中、安装脚本保留 PS5.1 所需 UTF-8 BOM
@@ -33,13 +37,13 @@ python -m unittest tests.test_static -v
 ```text
 pwsh -NoProfile -File tests/run_tests.ps1
 → py_compile OK；独立 mock 冒烟 OK（problems=0）
-→ Ran 234 tests in 1.8s / OK
+→ Ran 236 tests in 1.8s / OK
 → 通过率 100%，mock 冒烟通过，结果 PASS
 ```
 
-覆盖 231 项契约用例 + 3 项静态检查：18 个 spec 形式（17 预设 + custom）、四种协议 URL/头/体、
+覆盖 231 项契约用例 + 5 项静态检查：18 个 spec 形式（17 预设 + custom）、五种协议（四种内置协议 + custom）URL/头/体、
 `style`/`contextitems`/`deadline` 选项、目标语言排版规则、非对白过滤、
-提示词模板与译文质量门（回显/脚本/超长）、
+提示词模板与译文质量门（empty/history_leak/wrong_script/echo/traditional/simplified/too_long）、
 登录自检（`/models`、`/api/tags`、`/v1/models`、`/v1beta/models`）、
 JSON 路径与 thinking 过滤、错误码映射、JSON 转义与 C0 控制字符、
 `SafeUrl` 编码/原文双重脱敏、`MaskKey` 边界、`auth=query` 归一化、
@@ -59,12 +63,13 @@ E2E 真实 HTTP（mock）。契约细节与边界决策见 `docs/testing/contrac
 ### 2.4 宿主 API 真实性
 
 `docs/api-signatures.txt` 由本机 `PotPlayer64.dll` 二进制提取，共 104 条签名。
-插件使用的 13 个 API 全部命中，且与 `Extension\api.txt` 一致：
+插件使用的 21 个 API 全部命中，且与 `Extension\api.txt` 一致：
 
-`HostOpenHTTP`、`HostGetContentHTTP`、`HostGetStatusHTTP`、`HostCloseHTTP`、
+`HostOpenHTTP`、`HostGetContentHTTP`、`HostGetStatusHTTP`、`HostGetHeaderHTTP`、`HostCloseHTTP`、
 `HostIncTimeOut`、`HostGetTickCount`、`HostLoadString`、`HostSaveString`、
 `HostPrintUTF8`、`HostOpenConsole`、`HostRegExpRemove`、`HostUrlEncode`、
-`HostSleep`。
+`HostSleep`、`HostFileExist`、`HostFileOpen`、`HostFileLength`、`HostFileRead`、`HostFileClose`、
+`HostGetPlayingFileName`、`HostGetPlayingTitle`。
 
 > `HostGetStatusHTTP` 在官方随扩展包分发的 17 个脚本中无使用先例（仅
 > api.txt 与二进制签名），是最高优先级的实机验证项。
@@ -99,7 +104,7 @@ E2E 真实 HTTP（mock）。契约细节与边界决策见 `docs/testing/contrac
 | `docs/testing/contract.md` | 契约测试说明与边界决策 |
 | `docs/testing/angelscript-validation.md` | AngelScript 校验工具链调研 |
 | `docs/providers.md` | 各服务 HTTP 契约 |
-| `tests/` | mock 服务 + Python 参考实现 + 234 用例（231 契约 + 3 静态） |
+| `tests/` | mock 服务 + Python 参考实现 + 236 用例（231 契约 + 5 静态） |
 | `tests/test_static.py` | 静态检查（unittest 发现，含风格表等长） |
 
 ## 5. 复跑命令

@@ -1,6 +1,11 @@
 # 上下文感知翻译流水线设计
 
-状态：Phase 1（Prompt 拆分）+ Phase 2（`split`）+ Phase 3（`turns`，默认关闭）已实现；Phase 4 的UTF-8 字节预算、历史过滤和 glossary 已实现基础版。默认 `contextmode=split`；提示词结构参考 Index-Translate / Hy-MT2 官方模板。
+> **文档定位：上下文流水线的设计记录，不是当前实现的契约。** 当前实现以
+> `docs/design.md` 和 `.as` 为准。Phase 1–4 已落地；主流程已经拆成
+> `PrepareTranslation` / `PrepareTranslationRequest` / `ExecuteTranslationRequest` /
+> `FinalizeTranslationRequest` / `CommitTranslation`。
+
+状态：Phase 1（Prompt 拆分）+ Phase 2（`split`）+ Phase 3（`turns`，默认关闭）已实现；Phase 4 的 UTF-8 字节预算、历史过滤和 glossary 已实现基础版。默认 `contextmode=split`；提示词结构参考 Index-Translate / Hy-MT2 官方模板。
 
 ## 1. 目标
 
@@ -32,25 +37,23 @@ Cache / History
 - 不要求插件读取完整字幕文件或做全片预翻译；
 - 不改变 PotPlayer 的宿主目标语言缓存行为（已有 `dst` 覆盖项）。
 
-## 2. 当前实现的边界
+## 2. 当前实现
 
-`Translate` 当前按以下顺序工作：
+`Translate` 只负责串联，阶段函数按以下顺序工作：
 
-1. 非对白过滤；
-2. 目标语言解析，支持 `dst` 覆盖；
-3. 上下文 key 变化时清缓存；
-4. `CacheFind(raw)`；
-5. `BuildPrompt`：固定规则 + 风格 + 目标语言规则 + 最近 4 组历史 + 当前句；
-6. `BuildBody`：按 OpenAI / Anthropic / Gemini / Ollama / custom 拼请求；
-7. 清洗、字体转换、质量校验、最多一次重试；
-8. 成功时写缓存和历史。
+1. `PrepareTranslation`：非对白过滤、配置/登录检查、目标语言、源语言归一化、
+   媒体/暂停重置、上下文与缓存身份、中文简繁直转、缓存查找；
+2. `PrepareTranslationRequest`：构造 system/context/user 文本、prompt、URL、headers、body；
+3. `ExecuteTranslationRequest`：首次请求，以及 400 / 413 / 200 空响应 / 429·5xx / 408·网络降级重试；
+4. `FinalizeTranslationRequest`：响应清洗后的繁简变体修正、质量门、质量重试；
+5. `CommitTranslation`：失败计数、缓存、历史、统计与返回值。
 
-主要问题：
+上下文默认保留最近 16 组成功译文，受 `contextitems=0..32` 和 UTF-8 字节预算
+`contextchars=2000`（上限 4000）约束。`split` 默认把规则放 system，把背景和当前句
+放在 user；`turns` 在协议支持角色轮次时使用；`block` 保持兼容回退。
 
-- 规则、历史值和当前句属于同一条 user 文本，模型没有强制的“参考区”边界；
-- 历史块使用 `- 原文 / 译文` 形式，模型可能整体复述；
-- 历史过滤只有固定窗口，没有UTF-8 字节预算、重复句过滤或术语表；
-- 质量修复是通用 strict prompt，没有按错误类型分流。
+设计阶段提出的“历史泄漏、固定窗口、无字节预算”等问题已经由当前实现覆盖；
+剩余限制见 `docs/design.md` §11。
 
 ## 3. 目标组件
 
@@ -72,7 +75,10 @@ g_history_src[]
 g_history_dst[]
 g_last_tick
 g_context_limit
-g_glossary[]
+g_context_char_limit
+g_context_mode
+g_glossary_src[]
+g_glossary_dst[]
 ```
 
 现有 `g_history_*` 保留，新增UTF-8 字节预算和过滤策略，避免大改状态结构。
@@ -90,9 +96,13 @@ UserText      当前待翻译字幕
 对应函数建议：
 
 ```text
-string BuildSystemPrompt(const string &in dstName, const string &in dstLabel)
-string BuildContextText()
-string BuildUserText(const string &in text)
+string BuildSystemPrompt(const string &in srcName, const string &in dstName,
+                         const string &in dstLabel, bool turns)
+string BuildContextBlock(bool includeHistory)
+string BuildUserBlock(const string &in text)
+string BuildPrompt(const string &in text, const string &in srcName,
+                   const string &in dstName, const string &in dstLabel,
+                   bool includeHistory)
 ```
 
 `block` 模式用 `ContextText + UserText` 拼回单条提示词，作为兼容回退；默认使用 `split`，不按模型路由。
@@ -112,8 +122,8 @@ string BuildUserText(const string &in text)
 建议保留现有 `BuildBody` 作为 `block` 包装，新增：
 
 ```text
-string BuildBodyEx(systemText, contextText, userText, text, srcName, dstName,
-                   minimal, mode)
+string BuildBodyPipeline(systemText, contextText, userText, blockPrompt,
+                         text, srcName, dstName, minimal, mode, includeHistory)
 ```
 
 `custom` 没有 `body` 模板时可以复用 OpenAI system；有模板时仍由用户控制，默认不注入角色。
@@ -136,7 +146,7 @@ too_long
 | 错误 | 处理 |
 | --- | --- |
 | `history_leak` | 使用无历史上下文重试 |
-| `traditional` / `simplified` | 优先本地确定性字形转换 |
+| `traditional` / `simplified` | `zh-CN` 本地确定性简化；`zh-TW` 预算内额外请求一次脚本转换 |
 | `echo` | 强化“只翻译当前句”，无历史重试 |
 | `too_long` | 使用紧凑提示词重试 |
 | `empty` | 使用 minimal body 重试 |
@@ -173,13 +183,13 @@ glossary=Name=译名,Name2=译名2
 
 ### Phase 0：基线
 
-- 保存当前 532 条唯一字幕、234 项测试的结果；
+- 保存当前 532 条唯一字幕、236 项测试的结果；
 - 记录历史泄漏率、目标字形错误、延迟、token；
 - 不改变输出。
 
 ### Phase 1：Prompt 拆分，行为不变
 
-- 引入 `BuildSystemPrompt / BuildContextText / BuildUserText`；
+- 引入 `BuildSystemPrompt / BuildContextBlock / BuildUserBlock`；
 - `block` 模式输出与当前完全一致；
 - 用现有测试锁定 block 回归。
 
@@ -195,7 +205,7 @@ glossary=Name=译名,Name2=译名2
 
 验收：
 
-- mock server 校验请求结构；
+- mock server 目前只校验 block 请求结构；split/turns 的结构由 `BuildBodyPipeline` 单测/设计审查覆盖，尚未纳入 E2E；
 - 532 条字幕历史泄漏不高于 block；
 - 延迟和 token 有记录。
 
@@ -216,7 +226,7 @@ glossary=Name=译名,Name2=译名2
 - 重复句/低信息量过滤；
 - UTF-8 字节预算；
 - 用户术语表；
-- 缓存 key 加入 provider/model/target/style/glossary；
+- 缓存 key 加入 provider/model/base/真实源语言/target/style/glossary；
 - 失败句不进入历史。
 
 ### Phase 5：修复分流与可观测性
@@ -229,8 +239,8 @@ glossary=Name=译名,Name2=译名2
 
 ### 单元/契约
 
-- 现有 234 项测试；
-- 新增每个协议的 `block/split/turns` 请求体断言；
+- 现有 236 项测试；
+- 计划新增每个协议的 `block/split/turns` 请求体断言（当前测试只覆盖 block）；
 - system 内容不包含当前字幕；
 - custom body 模板不受影响；
 - 无 `contextmode` 时输出与基线一致；

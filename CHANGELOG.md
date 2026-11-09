@@ -19,17 +19,18 @@
 - 新增 `dst=<语言代码>` 选项，可绕过 PotPlayer 目标语言缓存，修改配置点确定后立即切换目标语言。
 - 目标为简体中文且原文可判断为中文时，直接做繁简转换，避免模型保留繁体字或改写语义。
 - 新增上下文泄漏检测：模型把“- 原文/译文”历史块复述进字幕时，重试一次并改用无上下文的提示词。
-- 新增 `think=0/1` 选项，可按 DeepSeek/Moonshot/Zhipu、Qwen/SiliconFlow、OpenRouter、vLLM/SGLang/LM Studio/custom、OpenAI 系、Ollama、Gemini 的对应字段关闭/开启 thinking；显式设置会覆盖预设自带字段。
+- 新增 `think=0/1` 选项，可按 DeepSeek/Moonshot/Zhipu、Qwen/SiliconFlow、OpenRouter、vLLM/SGLang/LM Studio/custom、OpenAI 系、Ollama、Gemini 的对应字段关闭/开启 thinking；Gemini 仅 `0` 发送 `thinkingBudget:0`，`1` 不发送正字段；显式设置会覆盖预设自带字段。
 - 新增上下文感知流水线：`contextmode=block|split|turns`、历史预算 `contextchars`（默认 2000 字节）、术语表 `glossary`；历史组数 `contextitems`（0..32，默认 16）；默认 `split`，历史放入 `【背景信息】`、当前句放入 `【待翻译文本】`，提示词结构参考 Index-Translate / Hy-MT2 官方模板。
 - `glossary` 支持 `@路径` / `file:路径` 读取本地 UTF-8 词表，按行解析 `=`、`=>`、`->`、`→`、`|`、Tab 分隔，`#` 为注释。
 - `style=movie|tv|anime|doc|tech|formal|casual` 翻译风格模板，按题材追加提示词规则；默认 `movie`。
 - `contextitems=0..32` 可调上下文窗口；历史同时保存原文与译文，提示词给出最近 N 组对照；`contextchars` 默认 2000 字节、上限 4000。
-- 缓存按模型/目标/风格/上下文模式与历史指纹区分，加入 LRU/TTL；切换播放文件自动清理上下文。
+- 缓存按 provider/model/base/真实源语言/目标/风格/上下文模式、路径/模板/扩展字段/温度/max_tokens/think/glossary 与历史指纹区分，加入 LRU/TTL；切换播放文件自动清理上下文和缓存。
 - 未知 opts、缺 `=` 或空 key 登录时报错。
 - 429/5xx 重试支持 `Retry-After`。
 - `custom` 显式设置 `probe=models` 时，会从 OpenAI 兼容 endpoint 派生 `/models`，登录时校验并列出可用模型；默认仍为 `none`；新增 `probe_timeout` 和 `headers`，`debug=2` 才输出请求/响应正文。
+- 单文件内将 `Translate` 拆为 `PrepareTranslation` / `PrepareTranslationRequest` / `ExecuteTranslationRequest` / `FinalizeTranslationRequest` / `CommitTranslation`，用 `TranslationJob` 传递上下文。
 - 源语言标识归一化：`English`/`en` 等归一为同一 source key，`UTF8` 沿用上次真实源语言；真实源语言变化时清理上下文。
-- 目标脚本策略：目标中文拒绝明显日文/韩文，目标韩文拒绝日文/纯汉字，塞尔维亚语允许拉丁/西里尔。
+- 目标脚本策略：目标中文拒绝明显日文/韩文，目标日文拒绝韩文，目标韩文拒绝日文/纯汉字，塞尔维亚语允许拉丁/西里尔；使用完整 UTF-8 Kana/Hangul/Han 范围而非少量 marker 字符。
 - 413 请求体过大增加无上下文降级；网络错误/408 在 deadline 内增加一次短重试。
 - `debug=1` 增加 requests/cache/retries/invalid 汇总计数。
 - 流媒体文件名为空时使用播放标题兜底检测媒体切换。
@@ -48,19 +49,18 @@
 
 ### 安全与健壮性
 
-- 登录框与诊断日志均不展示明文 Key；`SafeUrl` 同时脱敏原始与 URL 编码后的 Key。
+- 诊断日志不展示明文 Key；`SafeUrl` 同时脱敏原始与 URL 编码后的 Key。登录框的密码显示由 PotPlayer 宿主控制。
 - 登录自检失败会置"已登出"状态，运行期不再用未验证配置逐行请求。
 - 重试前比较请求体，避免重复发送完全相同的最小体；单行通常 1-3 次请求，质量重试最多再加 1 次，且共享单条 deadline。
 - `temp=1.` / `temp=.5` / `temp=01` 规范化为合法 JSON number，不再产生非法请求体。
 - RTL 判断按本地化语言标签映射，参考实现与 14 项前缀表对齐 `.as`。
 - `Probe` 超时默认 10 s，可用 `probe_timeout=1000..60000` 调整；User-Agent 版本与插件版本一致。
 - JSON 转义自实现，剔除 C0 控制字符；请求统一使用 `NoCookie=true`。
-- 登录框短 Key（<16 位）只显示 `****`。
 
 ### 验证
 
-- `tests/test_static.py` 静态检查通过（括号配平、入口点、语言表/预设表/风格表长度、13 个 Host API 签名核对）。
-- `tests/` 234 项检查全部通过（231 契约用例 + 3 静态检查；Python 参考实现 + 本机 mock 服务）；Windows PowerShell 5.1 与 PowerShell 7 均验证可跑。
+- `tests/test_static.py` 静态检查通过（括号配平、入口点、语言表/预设表/风格表长度、Host API 签名核对、语言表定义守护）。
+- `tests/` 236 项检查全部通过（231 契约用例 + 5 静态检查；Python 参考实现 + 本机 mock 服务）；Windows PowerShell 5.1 与 PowerShell 7 均验证可跑。
 - 独立代码审查：P0 = 0，P1 全部修复；`HostGetStatusHTTP` 等宿主行为列为实机必验项。
 
 ### 已知限制

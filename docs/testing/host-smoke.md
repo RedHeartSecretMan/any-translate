@@ -26,7 +26,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 
 ## 3. 登录与 probe
 
-1. 配置本地或云端服务。
+1. 配置本机或云端服务。
 2. 若使用 `probe=models`，确认登录成功或错误信息可操作。
 3. custom + `probe=models` 时，确认派生 `/models` 不阻塞登录；没有模型列表接口时 404/405 应放行。
 4. 故意填错模型名，确认登录错误能显示可用模型或明确原因。

@@ -2176,6 +2176,13 @@ bool ChineseVariantMismatch(const string &in result, const string &in dstCode)
 }
 
 // 日文假名/韩文标记：用于避免把日韩字幕误判成"可直接简繁转换的中文"。
+array<string> LATIN_LANG_CODES =
+{
+    "en", "fr", "de", "es", "it", "pt", "nl", "pl", "tr", "vi", "id", "ms",
+    "ro", "cs", "sk", "hu", "hr", "sl", "et", "lv", "lt", "fi", "sv", "da",
+    "no", "is", "ca", "gl", "eu", "af", "sw"
+};
+
 bool HasUtf8Range3(const string &in s, const string &in lo, const string &in hi)
 {
     for (int i = 0; i + 2 < s.length(); i++)
@@ -2633,27 +2640,266 @@ void DbgStats()
 }
 
 // ===========================================================================
+// 翻译请求阶段
+// ===========================================================================
+
+class TranslationJob
+{
+    string raw;
+    bool selfTest;
+    string realSrc;
+    string dstLabel;
+    string dstCode;
+    string srcName;
+    string dstName;
+    string contextMode;
+    string systemText;
+    string contextText;
+    string userText;
+    string prompt;
+    string url;
+    string headers;
+    string body;
+    string lastSentBody;
+    string result;
+    uint startTick;
+    int requests;
+    bool ok;
+    bool markUtf8;
+
+    TranslationJob()
+    {
+        raw = "";
+        selfTest = false;
+        realSrc = "";
+        dstLabel = "";
+        dstCode = "";
+        srcName = "";
+        dstName = "";
+        contextMode = "";
+        systemText = "";
+        contextText = "";
+        userText = "";
+        prompt = "";
+        url = "";
+        headers = "";
+        body = "";
+        lastSentBody = "";
+        result = "";
+        startTick = 0;
+        requests = 1;
+        ok = false;
+        markUtf8 = false;
+    }
+};
+
+string BuildJobBody(TranslationJob@ job, const string &in userText,
+                     const string &in blockPrompt, const string &in contextText,
+                     bool minimal, bool includeHistory)
+{
+    return BuildBodyPipeline(job.systemText, contextText, userText, blockPrompt,
+                             job.raw, job.srcName, job.dstName, minimal,
+                             job.contextMode, includeHistory);
+}
+
+bool RetryWithBody(TranslationJob@ job, const string &in body, const string &in log)
+{
+    if (body == job.lastSentBody) return false;
+    if (!log.empty()) Dbg(log);
+    g_stat_retries++;
+    job.ok = SendOnce(job.url, job.headers, body, job.result, RemainingBudget(job.startTick));
+    job.lastSentBody = body;
+    job.requests++;
+    return job.ok;
+}
+
+void PrepareTranslationRequest(TranslationJob@ job)
+{
+    job.dstCode = LangCodeFor(job.dstLabel);
+    g_dst_rtl = IsRtlLabel(job.dstLabel);
+    job.srcName = (job.realSrc == "auto") ? "" : ResolvePromptLang(job.realSrc);
+    job.dstName = ResolvePromptLang(job.dstLabel);
+    job.contextMode = EffectiveContextMode();
+    job.systemText = BuildSystemPrompt(job.srcName, job.dstName, job.dstLabel, job.contextMode == "turns");
+    job.contextText = BuildContextBlock(true);
+    job.userText = BuildUserBlock(job.raw);
+    job.prompt = BuildPrompt(job.raw, job.srcName, job.dstName, job.dstLabel, true);
+
+    Dbg("translate: len=" + formatInt(job.raw.length()) + " mode=" + job.contextMode);
+    if (g_debug_verbose) Dbg("translate text=" + Truncate(job.raw, 80));
+
+    job.url = BuildUrl();
+    job.headers = BuildHeaders();
+    job.body = BuildJobBody(job, job.userText, job.prompt, job.contextText,
+                            g_minimal_body, true);
+    Dbg("POST " + SafeUrl(job.url) + " body_len=" + formatInt(job.body.length()));
+    if (g_debug_verbose) Dbg("POST body=" + Truncate(job.body, 500));
+    job.startTick = HostGetTickCount();
+}
+
+void ExecuteTranslationRequest(TranslationJob@ job)
+{
+    job.result = "";
+    job.lastSentBody = job.body;
+    job.requests = 1;
+    job.ok = SendOnce(job.url, job.headers, job.body, job.result, g_deadline_ms);
+
+    if (!job.ok && g_http_status == 400 && !g_minimal_body && IsParamError400() &&
+        RemainingBudget(job.startTick) > 1000)
+    {
+        Dbg("400 detail: " + Truncate(ExtractErrorDetail(), 200));
+        string minimalBody = BuildJobBody(job, job.userText, job.prompt,
+                                          job.contextText, true, true);
+        if (RetryWithBody(job, minimalBody, "") && job.ok)
+        {
+            g_minimal_body = true;
+            Dbg("switch to minimal body after 400");
+        }
+    }
+
+    if (!job.ok && g_http_status == 413 && RemainingBudget(job.startTick) > 1200)
+    {
+        string fallbackPrompt = BuildPrompt(job.raw, job.srcName, job.dstName, job.dstLabel, false);
+        string fallbackBody = BuildJobBody(job, job.userText, fallbackPrompt, "",
+                                           g_minimal_body, false);
+        RetryWithBody(job, fallbackBody, "413: retry without history");
+    }
+
+    if (!job.ok && g_http_status == 200 && RemainingBudget(job.startTick) > 1000)
+    {
+        string minimalBody2 = BuildJobBody(job, job.userText, job.prompt,
+                                           job.contextText, true, true);
+        RetryWithBody(job, minimalBody2, "empty content, retry minimal body");
+    }
+
+    if (!job.ok && (g_http_status == 429 || g_http_status >= 500) &&
+        RemainingBudget(job.startTick) > 1200)
+    {
+        int waitMs = RetryAfterMs(g_http_status == 429 ? 400 : 600);
+        int remain = RemainingBudget(job.startTick);
+        if (waitMs > remain - 600) waitMs = remain - 600;
+        if (waitMs < 50) waitMs = 50;
+        Dbg("retry after " + formatInt(waitMs) + "ms (HTTP " + formatInt(g_http_status) + ")");
+        HostSleep(waitMs);
+        if (RemainingBudget(job.startTick) > 500)
+        {
+            g_stat_retries++;
+            job.ok = SendOnce(job.url, job.headers, job.lastSentBody, job.result, RemainingBudget(job.startTick));
+            job.requests++;
+        }
+    }
+
+    if (!job.ok && (g_http_status == 0 || g_http_status == 408) &&
+        RemainingBudget(job.startTick) > 1500)
+    {
+        Dbg("transient network error, retry once");
+        HostSleep(200);
+        if (RemainingBudget(job.startTick) > 500)
+        {
+            g_stat_retries++;
+            job.ok = SendOnce(job.url, job.headers, job.lastSentBody, job.result, RemainingBudget(job.startTick));
+            job.requests++;
+        }
+    }
+}
+
+void FinalizeTranslationRequest(TranslationJob@ job)
+{
+    if (!job.ok) return;
+
+    if (job.dstCode == "zh-CN")
+    {
+        job.result = ToSimplified(job.result);
+    }
+    else if (job.dstCode == "zh-TW" && ChineseVariantMismatch(job.result, job.dstCode) &&
+             RemainingBudget(job.startTick) > 1200)
+    {
+        Dbg("variant mismatch, convert script to " + job.dstCode);
+        string convPrompt = BuildScriptConversionPrompt(job.result, job.dstCode);
+        string convBody = BuildBody(convPrompt, job.result, job.srcName, job.dstName, g_minimal_body);
+        string converted = "";
+        if (SendOnce(job.url, job.headers, convBody, converted, RemainingBudget(job.startTick)))
+        {
+            if (!ChineseVariantMismatch(converted, job.dstCode))
+            {
+                job.result = converted;
+                Dbg("variant conversion ok");
+            }
+        }
+        job.requests++;
+    }
+
+    string invalid = ValidateTranslation(job.raw, job.result, job.realSrc, job.dstLabel);
+    if (!invalid.empty())
+    {
+        g_stat_invalid++;
+        Dbg("validation failed: " + invalid);
+        if (RemainingBudget(job.startTick) > 1200)
+        {
+            string basePrompt = job.prompt;
+            string strictContext = job.contextText;
+            bool includeHistory = true;
+            if (invalid == "history_leak")
+            {
+                basePrompt = BuildPrompt(job.raw, job.srcName, job.dstName, job.dstLabel, false);
+                strictContext = "\n";
+                includeHistory = false;
+            }
+            string strictNote = "\n\n【重要】上一次输出不合格（" + ValidationReasonZh(invalid) +
+                "）：只输出译文本身，不要回显原文、不要解释，必须使用目标语言。";
+            string strictPrompt = basePrompt + strictNote;
+            string strictUser = job.userText + strictNote;
+            string strictBody = BuildJobBody(job, strictUser, strictPrompt, strictContext,
+                                             g_minimal_body, includeHistory);
+            g_stat_retries++;
+            job.ok = SendOnce(job.url, job.headers, strictBody, job.result, RemainingBudget(job.startTick));
+            job.lastSentBody = strictBody;
+            job.requests++;
+            if (job.ok)
+            {
+                invalid = ValidateTranslation(job.raw, job.result, job.realSrc, job.dstLabel);
+            }
+        }
+        else
+        {
+            Dbg("quality retry skipped: deadline");
+        }
+        if (!invalid.empty())
+        {
+            Dbg("validation failed after retry: " + invalid);
+            job.ok = false;
+        }
+    }
+}
+
+// ===========================================================================
 // 翻译主流程
 // ===========================================================================
 
-string Translate(string Text, string &in SrcLang, string &in DstLang)
+bool PrepareTranslation(string Text, string SrcLang, string DstLang,
+                        string &outResult, TranslationJob@ job)
 {
+    outResult = "";
+
     string raw = Text;
     bool selfTest = IsSelfTestText(raw);
-    if (Trimmed(raw).empty()) return "";
+    if (Trimmed(raw).empty())
+    {
+        outResult = "";
+        return false;
+    }
 
     if (selfTest && HostLoadString("anytr_spec", "").empty() && HostLoadString("anytr_key", "").empty())
     {
-        return "AnyTranslate test: not configured; set provider/model and API Key first";
+        outResult = "AnyTranslate test: not configured; set provider/model and API Key first"; return false;
     }
 
     if (IsNonDialogueText(raw))
     {
         Dbg("skip non-dialogue: len=" + formatInt(raw.length()));
         if (g_debug_verbose) Dbg("skip non-dialogue text=" + Truncate(raw, 40));
-        SrcLang = "UTF8";
-        DstLang = "UTF8";
-        return raw;
+        job.markUtf8 = true;
+        outResult = raw; return false;
     }
 
     if (!g_configured)
@@ -2673,14 +2919,16 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
     if (g_logged_out)
     {
         Dbg("skip translate: logged out");
-        if (selfTest) return "AnyTranslate test: not logged in; configure and login first";
-        return "";
+        if (selfTest) outResult = "AnyTranslate test: not logged in; configure and login first";
+        else outResult = "";
+        return false;
     }
     if (g_base.empty())
     {
         Dbg("skip translate: empty base URL");
-        if (selfTest) return "AnyTranslate test: base URL is empty";
-        return "";
+        if (selfTest) outResult = "AnyTranslate test: base URL is empty";
+        else outResult = "";
+        return false;
     }
 
     // 个别情况下 PotPlayer 会把上次写回的 "UTF8" 再传回来，用上次目标语言兜底
@@ -2696,13 +2944,14 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
     if (dstLabel == "UTF8")
     {
         Dbg("skip translate: DstLang=UTF8 and no previous target");
-        return "";
+        outResult = ""; return false;
     }
     if (dstLabel.empty() || dstLabel == "Auto" || dstLabel == "自动检测")
     {
         Dbg("skip translate: no destination language (DstLang=" + DstLang + ")");
-        if (selfTest) return "AnyTranslate test: destination language is not selected";
-        return "";
+        if (selfTest) outResult = "AnyTranslate test: destination language is not selected";
+        else outResult = "";
+        return false;
     }
 
     string srcKey = NormalizeSourceKey(SrcLang);
@@ -2740,7 +2989,7 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
 
     string ctxKey = g_provider + "|" + g_model + "|" + realSrc + "|" + dstLabel + "|" + g_style +
                     "|" + formatInt(g_context_limit) + "|" + g_context_mode +
-                    "|" + formatInt(g_context_char_limit) + "|" + formatInt(g_glossary_src.size());
+                    "|" + formatInt(g_context_char_limit) + "|" + BuildGlossaryText();
     if (ctxKey != g_context_key)
     {
         ClearContext();
@@ -2763,9 +3012,8 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
         CachePut(raw, converted);
         PushHistory(raw, converted);
         Dbg("direct zh-CN conversion");
-        SrcLang = "UTF8";
-        DstLang = "UTF8";
-        return converted;
+        job.markUtf8 = true;
+        outResult = converted; return false;
     }
 
     int hit = CacheFind(raw);
@@ -2774,212 +3022,68 @@ string Translate(string Text, string &in SrcLang, string &in DstLang)
         g_stat_cache_hits++;
         g_fail_count = 0;
         PushHistory(raw, g_cache_vals[hit]);
-        SrcLang = "UTF8";
-        DstLang = "UTF8";
-        return g_cache_vals[hit];
+        job.markUtf8 = true;
+        outResult = g_cache_vals[hit]; return false;
     }
 
+    job.raw = raw;
+    job.selfTest = selfTest;
+    job.realSrc = realSrc;
+    job.dstLabel = dstLabel;
     g_stat_cache_misses++;
-    g_dst_rtl = IsRtlLabel(dstLabel);
-    string srcName = "";
-    if (realSrc != "auto") srcName = ResolvePromptLang(realSrc);
-    string dstName = ResolvePromptLang(dstLabel);
-    string contextMode = EffectiveContextMode();
-    string systemText = BuildSystemPrompt(srcName, dstName, dstLabel, contextMode == "turns");
-    string contextText = BuildContextBlock(true);
-    string userText = BuildUserBlock(raw);
-    string prompt = BuildPrompt(raw, srcName, dstName, dstLabel, true);
+    return true;
+}
 
-    Dbg("translate: len=" + formatInt(raw.length()) + " mode=" + contextMode);
-    if (g_debug_verbose) Dbg("translate text=" + Truncate(raw, 80));
-
-    string url = BuildUrl();
-    string headers = BuildHeaders();
-    string body = BuildBodyPipeline(systemText, contextText, userText, prompt,
-                                    raw, srcName, dstName, g_minimal_body,
-                                    contextMode, true);
-    Dbg("POST " + SafeUrl(url) + " body_len=" + formatInt(body.length()));
-    if (g_debug_verbose) Dbg("POST body=" + Truncate(body, 500));
-
-    uint startTick = HostGetTickCount();
-    string result = "";
-    string lastSentBody = body;
-    int budget = g_deadline_ms;
-    bool ok = SendOnce(url, headers, body, result, budget);
-    int requests = 1;
-
-    if (!ok && g_http_status == 400 && !g_minimal_body && IsParamError400() &&
-        RemainingBudget(startTick) > 1000)
-    {
-        Dbg("400 detail: " + Truncate(ExtractErrorDetail(), 200));
-        string minimalBody = BuildBodyPipeline(systemText, contextText, userText, prompt,
-                                               raw, srcName, dstName, true,
-                                               contextMode, true);
-        if (minimalBody != lastSentBody)
-        {
-            g_stat_retries++;
-            ok = SendOnce(url, headers, minimalBody, result, RemainingBudget(startTick));
-            lastSentBody = minimalBody;
-            requests++;
-            if (ok)
-            {
-                g_minimal_body = true;
-                Dbg("switch to minimal body after 400");
-            }
-        }
-    }
-
-    if (!ok && g_http_status == 413 && RemainingBudget(startTick) > 1200)
-    {
-        Dbg("413: retry without history");
-        string fallbackPrompt = BuildPrompt(raw, srcName, dstName, dstLabel, false);
-        string fallbackBody = BuildBodyPipeline(systemText, "", userText, fallbackPrompt,
-                                                raw, srcName, dstName, g_minimal_body,
-                                                contextMode, false);
-        if (fallbackBody != lastSentBody)
-        {
-            g_stat_retries++;
-            ok = SendOnce(url, headers, fallbackBody, result, RemainingBudget(startTick));
-            lastSentBody = fallbackBody;
-            requests++;
-        }
-    }
-
-    if (!ok && g_http_status == 200 && RemainingBudget(startTick) > 1000)
-    {
-        string minimalBody2 = BuildBodyPipeline(systemText, contextText, userText, prompt,
-                                                raw, srcName, dstName, true,
-                                                contextMode, true);
-        if (minimalBody2 != lastSentBody)
-        {
-            Dbg("empty content, retry minimal body");
-            g_stat_retries++;
-            ok = SendOnce(url, headers, minimalBody2, result, RemainingBudget(startTick));
-            lastSentBody = minimalBody2;
-            requests++;
-        }
-    }
-
-    if (!ok && (g_http_status == 429 || g_http_status >= 500) &&
-        RemainingBudget(startTick) > 1200)
-    {
-        int waitMs = RetryAfterMs(g_http_status == 429 ? 400 : 600);
-        int remain = RemainingBudget(startTick);
-        if (waitMs > remain - 600) waitMs = remain - 600;
-        if (waitMs < 50) waitMs = 50;
-        Dbg("retry after " + formatInt(waitMs) + "ms (HTTP " + formatInt(g_http_status) + ")");
-        HostSleep(waitMs);
-        if (RemainingBudget(startTick) > 500)
-        {
-            g_stat_retries++;
-            ok = SendOnce(url, headers, body, result, RemainingBudget(startTick));
-            requests++;
-        }
-    }
-
-    if (!ok && (g_http_status == 0 || g_http_status == 408) &&
-        RemainingBudget(startTick) > 1500)
-    {
-        Dbg("transient network error, retry once");
-        HostSleep(200);
-        if (RemainingBudget(startTick) > 500)
-        {
-            g_stat_retries++;
-            ok = SendOnce(url, headers, lastSentBody, result, RemainingBudget(startTick));
-            requests++;
-        }
-    }
-
-    if (ok)
-    {
-        string dstCode = LangCodeFor(dstLabel);
-        if (dstCode == "zh-CN")
-        {
-            result = ToSimplified(result);
-        }
-        else if (dstCode == "zh-TW" && ChineseVariantMismatch(result, dstCode) && RemainingBudget(startTick) > 1200)
-        {
-            Dbg("variant mismatch, convert script to " + dstCode);
-            string convPrompt = BuildScriptConversionPrompt(result, dstCode);
-            string convBody = BuildBody(convPrompt, result, srcName, dstName, g_minimal_body);
-            string converted = "";
-            if (SendOnce(url, headers, convBody, converted, RemainingBudget(startTick)))
-            {
-                if (!ChineseVariantMismatch(converted, dstCode))
-                {
-                    result = converted;
-                    Dbg("variant conversion ok");
-                }
-            }
-            requests++;
-        }
-
-        string invalid = ValidateTranslation(raw, result, realSrc, dstLabel);
-        if (!invalid.empty())
-        {
-            g_stat_invalid++;
-            Dbg("validation failed: " + invalid);
-            if (RemainingBudget(startTick) > 1200)
-            {
-                string basePrompt = prompt;
-                string strictContext = contextText;
-                bool includeHistory = true;
-                if (invalid == "history_leak")
-                {
-                    basePrompt = BuildPrompt(raw, srcName, dstName, dstLabel, false);
-                    strictContext = "\n";
-                    includeHistory = false;
-                }
-                string strictNote = "\n\n【重要】上一次输出不合格（" + ValidationReasonZh(invalid) +
-                    "）：只输出译文本身，不要回显原文、不要解释，必须使用目标语言。";
-                string strictPrompt = basePrompt + strictNote;
-                string strictUser = userText + strictNote;
-                string strictBody = BuildBodyPipeline(systemText, strictContext, strictUser, strictPrompt,
-                                                      raw, srcName, dstName, g_minimal_body,
-                                                      contextMode, includeHistory);
-                g_stat_retries++;
-                ok = SendOnce(url, headers, strictBody, result, RemainingBudget(startTick));
-                requests++;
-                if (ok)
-                {
-                    invalid = ValidateTranslation(raw, result, realSrc, dstLabel);
-                }
-            }
-            else
-            {
-                Dbg("quality retry skipped: deadline");
-            }
-            if (!invalid.empty())
-            {
-                Dbg("validation failed after retry: " + invalid);
-                ok = false;
-            }
-        }
-    }
-
-    uint elapsed = HostGetTickCount() - startTick;
-    if (!ok)
+string CommitTranslation(TranslationJob@ job)
+{
+    uint elapsed = HostGetTickCount() - job.startTick;
+    if (!job.ok)
     {
         g_fail_count++;
-        Dbg("translate failed in " + formatInt(int(elapsed)) + "ms, requests=" + formatInt(requests) + ": " + ErrorHint());
+        Dbg("translate failed in " + formatInt(int(elapsed)) + "ms, requests=" + formatInt(job.requests) + ": " + ErrorHint());
         if (g_fail_count >= FAIL_CLEAR)
         {
             g_fail_count = 0;
             ClearHistory();
         }
         DbgStats();
-        if (selfTest) return "AnyTranslate test failed: " + TestErrorHint();
+        if (job.selfTest) return "AnyTranslate test failed: " + TestErrorHint();
         return "";
     }
 
     g_fail_count = 0;
-    CachePut(raw, result);
-    PushHistory(raw, result);
-    Dbg("translate ok in " + formatInt(int(elapsed)) + "ms, requests=" + formatInt(requests));
+    CachePut(job.raw, job.result);
+    PushHistory(job.raw, job.result);
+    Dbg("translate ok in " + formatInt(int(elapsed)) + "ms, requests=" + formatInt(job.requests));
     DbgStats();
 
-    SrcLang = "UTF8";
-    DstLang = "UTF8";
+    job.markUtf8 = true;
+    return job.result;
+}
+
+string Translate(string Text, string &in SrcLang, string &in DstLang)
+{
+    TranslationJob job;
+    string prepared = "";
+    if (!PrepareTranslation(Text, SrcLang, DstLang, prepared, job))
+    {
+        if (job.markUtf8)
+        {
+            SrcLang = "UTF8";
+            DstLang = "UTF8";
+        }
+        return prepared;
+    }
+
+    PrepareTranslationRequest(job);
+    ExecuteTranslationRequest(job);
+    FinalizeTranslationRequest(job);
+    string result = CommitTranslation(job);
+    if (job.markUtf8)
+    {
+        SrcLang = "UTF8";
+        DstLang = "UTF8";
+    }
     return result;
 }
 

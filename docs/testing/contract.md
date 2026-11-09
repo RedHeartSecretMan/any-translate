@@ -124,19 +124,22 @@ auth   := bearer | x-api-key | query | none
 ### 3.3 URL / 请求头 / 请求体（ref 断言口径）
 
 所有 URL 都是 `base.rstrip("/")` 后拼接；所有请求统一头
-`Content-Type: application/json` + `Accept: application/json`：
+`Content-Type: application/json` + `Accept: application/json`。下表请求体展示
+`block` / 单条 user 兼容形态；默认 `contextmode=split` 会额外带 system 规则：
+
+
 
 | kind | URL | 认证 | 请求体（非 minimal） |
 | --- | --- | --- | --- |
 | openai | `{base}/chat/completions` | `Authorization: Bearer <key>`（key 非空） | `{model?, messages:[{role:"user",content:prompt}], stream:false, temperature:0.2, [max_completion_tokens], 厂商扩展字段}` |
 | anthropic | `{base}/v1/messages` | `x-api-key: <key>`（key 非空）+ `anthropic-version: <version>` | `{model?, max_tokens:1024(可覆盖), messages:[{role:"user",content:prompt}]}` |
-| gemini | `{base}/v1beta/models/{model}:generateContent`（**Key 不进 URL**） | `x-goog-api-key: <key>`（key 非空） | `{contents:[{parts:[{text:prompt}]}], generationConfig:{temperature, [maxOutputTokens], thinkingConfig:{thinkingBudget:0}}}` |
+| gemini | `{base}/v1beta/models/{model}:generateContent`（**Key 不进 URL**） | `x-goog-api-key: <key>`（key 非空） | `{contents:[{parts:[{text:prompt}]}], generationConfig:{temperature, [maxOutputTokens], thinkingConfig:{thinkingBudget:0}}}`（默认/`think=0`；`think=1` 无正字段） |
 | ollama | `{base}/api/chat` | 默认无认证 | `{model?, messages:[…], stream:false, think:false, options:{temperature, [num_predict]}}` |
 | custom | 用户 URL 原样 | 按 auth：bearer/x-api-key/query/none | body 模板优先；否则 OpenAI 兼容体 |
 
 补充：
-- `minimal=1`：openai/custom 只保留 `{model?, messages, stream:false}`；
-  ollama 只保留 `{model?, messages, stream:false}`；gemini 去掉
+- `minimal=1`：openai/custom 保留 `{model?, messages, stream:false}` 及显式 think 字段；
+  ollama 保留 `{model?, messages, stream:false}` 及显式 think；gemini 去掉
   `thinkingConfig`（保留 temperature）；anthropic 无 minimal 分支。
   custom 带 `body` 模板时模板优先，`minimal` 不生效。
 - `max_tokens=` 映射：openai/custom → `max_completion_tokens`；ollama →
@@ -322,7 +325,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 | D-30 | JsonEscape C0 | 剔除 C0（`\t\n\r` 除外），`\b`/`\f` 也剔除而非转义；`StripChars` 上限 1024 | aligned |
 | D-31 | 404 文案 | `ErrorHint` 404 = “接口地址或模型不存在”；ref 稳定文案含同一短语 | aligned |
 | D-32 | style/contextitems/deadline | `style` 默认 `movie`，非法值报 `bad_opts`；`contextitems` 默认 16、夹到 0..32；`deadline` 默认 6000、夹到 2000..20000；三者都参与运行时行为，不改变 HTTP 协议 | aligned |
-| D-33 | 译文质量门 | `validate_translation` 返回 `empty` / `echo` / `wrong_script` / `too_long`；`validation_reason_zh` 提供重试提示中文原因；拉丁短名/缩写放行 | ref abstraction |
+| D-33 | 译文质量门 | `validate_translation` 返回 `empty` / `history_leak` / `wrong_script` / `echo` / `traditional` / `simplified` / `too_long`；`validation_reason_zh` 提供重试提示中文原因；拉丁短名/缩写放行 | ref abstraction |
 | D-34 | 非对白过滤 | 纯符号/数字/音乐符号行由 `is_non_dialogue_text` 判定，本地原样返回，不请求 API | ref abstraction |
 
 ## 7. 人工交叉核对清单（`.as` ↔ tests）
@@ -409,6 +412,7 @@ trim → 去常见前缀（14 项表，最多 3 轮）→ `原文：/Original:` 
 
 ---
 
-最后更新：2026-11-07（0.1.0：style/contextitems/deadline、目标语言规则、译文质量门、
-非对白过滤；同时回归 SafeUrl 编码脱敏 / auth=query 归一化 / MaskKey <16 /
-ErrorHint 404 / JsonEscape 剔除 C0；234 用例全部通过，`run_tests.ps1` 一键 PASS）。
+最后更新：2026-11-09（0.1.0：style/contextitems/contextmode/contextchars/deadline、
+源语言归一化、目标脚本策略、413/408/网络降级、质量门、非对白过滤；同时回归
+SafeUrl 编码脱敏 / auth=query 归一化 / MaskKey <16 / ErrorHint 404 / JsonEscape
+剔除 C0；236 用例全部通过，`run_tests.ps1` 一键 PASS）。
