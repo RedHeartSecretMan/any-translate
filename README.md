@@ -2,7 +2,7 @@
 
 <h1 align="center">any-translate</h1>
 
-<p align="center"><b>PotPlayer 实时字幕翻译插件：一个 <code>.as</code> 文件，接入任意 LLM / JSON 翻译 API。</b></p>
+<p align="center"><b>PotPlayer 实时字幕翻译插件：一个 <code>.as</code> 文件，接入任意 LLM 或 JSON 翻译接口。</b></p>
 
 <p align="center">
   <a href="CHANGELOG.md"><img alt="Version 0.1.0" src="https://img.shields.io/badge/version-0.1.0-f59e0b.svg"></a>
@@ -23,7 +23,7 @@
 
 ---
 
-any-translate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译插件：把一条外文字幕交给任意 LLM 或翻译 API，返回一条目标语言字幕。整个插件只有一个 AngelScript 文件，无需安装器，也不用改源码换服务商。
+any-translate 是 [PotPlayer](https://potplayer.daum.net/) 的实时字幕翻译插件：把一条外文字幕交给任意 LLM 或 JSON 翻译接口，返回一条目标语言字幕。整个插件只有一个 AngelScript 文件，无需安装器，也不用改源码换服务商。
 
 内置 OpenAI 兼容、Anthropic Messages、Gemini generateContent、Ollama 和自定义 JSON 五种协议；OpenAI、DeepSeek、Kimi、智谱、通义千问、硅基流动、OpenRouter、Groq、xAI、Mistral、Together、vLLM、SGLang、LM Studio、Ollama 等 17 个预设开箱即用，one-api/new-api 等网关和其他接口用一行 `custom|...` 配置接入。
 

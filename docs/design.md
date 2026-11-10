@@ -1,6 +1,6 @@
 # any-translate 设计说明
 
-> PotPlayer 实时字幕翻译插件，单文件 AngelScript 实现，可接入任意 LLM / 翻译 API。
+> PotPlayer 实时字幕翻译插件，单文件 AngelScript 实现，可接入任意 LLM 或 JSON 翻译接口。
 > 版本：0.1.0（脚本 `GetVersion` 返回 `0.1.0`）｜作者：RedHeartSecretMan｜文档状态：实现契约
 >
 > 本文件是实现契约与设计取舍的单一入口；测试证据见 [`verification.md`](verification.md)，

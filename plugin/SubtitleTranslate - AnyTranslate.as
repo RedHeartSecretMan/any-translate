@@ -1,6 +1,6 @@
 /*
     AnyTranslate 0.1.0
-    Real-time subtitle translation for PotPlayer using any LLM / translation API.
+    Real-time subtitle translation for PotPlayer using any LLM or JSON translation API.
 
     SPDX-License-Identifier: MIT
     Copyright (c) 2026 RedHeartSecretMan
