@@ -148,6 +148,6 @@ if ($DryRun) {
     Write-Host "dry run 完成：未修改任何文件。"
     exit 0
 }
-Write-Host "安装完成。请重启 PotPlayer，然后在 字幕 -> 实时字幕翻译 中选择 AnyTranslate。"
+Write-Host "安装完成。请重启 PotPlayer，然后在 字幕 -> 实时字幕翻译 中选择 AnyTranslate 任意翻译。"
 Write-Host "配置方法见 README.md。"
 

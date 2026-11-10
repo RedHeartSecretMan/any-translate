@@ -85,7 +85,7 @@ E2E 真实 HTTP（mock）。契约细节与边界决策见 `docs/testing/contrac
 4. `HostIncTimeOut(deadline)` 在慢请求下的实际效果（默认 6 s，最大 20 s）。
 5. `HostRegExpRemove` 对 `[\x00-\x08…]` 的 std::regex 支持。
 6. `&in` 参数写回（`SrcLang/DstLang = "UTF8"`）是否被宿主读取。
-7. `GetVersion "0.1.0"`、`GetTitle` 多语言标签的菜单显示；`style`/`deadline` 在真实模型上的效果。
+7. `GetVersion "0.1.0"`、`GetTitle` 按界面语言显示简体、繁体、韩文、日文名称，英文与默认回退为 `AnyTranslate`；`style`/`deadline` 在真实模型上的效果。
 8. 各真实服务商的 Key/模型名与真实网络环境（含代理）下的端到端翻译。
 
 实机验证顺序：安装 → 重启 PotPlayer → 选择 AnyTranslate → 用错误 Key 登录

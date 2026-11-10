@@ -20,7 +20,7 @@
 
 string GetTitle()
 {
-    return "{$CP936=AnyTranslate 翻译$}{$CP950=AnyTranslate 翻譯$}{$CP949=AnyTranslate 번역$}{$CP932=AnyTranslate 翻訳$}{$CP0=AnyTranslate}";
+    return "{$CP936=AnyTranslate 任意翻译$}{$CP950=AnyTranslate 任意翻譯$}{$CP949=AnyTranslate 임의번역$}{$CP932=AnyTranslate 任意翻訳$}{$CP0=AnyTranslate}";
 }
 
 string GetVersion()

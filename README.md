@@ -89,7 +89,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Uninstall
 
 ### 2. 启用实时字幕
 
-重启 PotPlayer，右键画面 → **字幕** → **实时字幕翻译** → **实时字幕设置**，勾选"生成有声字幕（实时）"。然后在同一窗口选择翻译插件 **AnyTranslate**。
+重启 PotPlayer，右键画面 → **字幕** → **实时字幕翻译** → **实时字幕设置**，勾选"生成有声字幕（实时）"。然后在同一窗口选择翻译插件 **AnyTranslate 任意翻译**。
 
 ### 3. 登录并配置
 

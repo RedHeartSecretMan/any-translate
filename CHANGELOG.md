@@ -10,7 +10,7 @@
 - 默认模型更新：DeepSeek `deepseek-v4.1-flash-1017`、SiliconFlow `deepseek-ai/DeepSeek-V4.1-Flash`、Qwen `qwen3.7-flash`、Together `moonshotai/Kimi-K3`。
 - 17 个服务商预设 + `custom|` 自定义接口语法（body 模板、JSON 路径、鉴权方式可配）；本机预设覆盖 vLLM / SGLang / LM Studio / Ollama。
 - 本机服务（vLLM / SGLang / LM Studio / Ollama）默认不猜模型：vLLM/SGLang/LM Studio 可留空，Ollama 用 `ollama:<model>` 显式指定。
-- 标题按简体中文、繁体中文、韩文、日文、默认回退排列，`GetTitle` 包含 CP936/CP950/CP949/CP932/CP0。
+- 菜单名称按界面语言显示：简体 `AnyTranslate 任意翻译`、繁体 `AnyTranslate 任意翻譯`、韩文 `AnyTranslate 임의번역`、日文 `AnyTranslate 任意翻訳`，英文与默认回退为 `AnyTranslate`。
 - 登录自检：按协议探测模型列表，校验 Key 与模型名，失败返回中文可操作提示。
 - 错误分类：401/402/403/404/413/422/429/5xx 分别提示。
 - 自动降级：400 且错误文本提示参数不支持时改用最小请求体；200 但无法提取译文（空/解析失败/路径不存在）时重试一次。

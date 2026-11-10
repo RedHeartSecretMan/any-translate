@@ -102,7 +102,7 @@ Translate
 ## 4. 插件契约
 
 ```
-string GetTitle()                       -> "{$CP936=AnyTranslate 翻译$}{$CP950=AnyTranslate 翻譯$}{$CP949=AnyTranslate 번역$}{$CP932=AnyTranslate 翻訳$}{$CP0=AnyTranslate}"
+string GetTitle()                       -> "{$CP936=AnyTranslate 任意翻译$}{$CP950=AnyTranslate 任意翻譯$}{$CP949=AnyTranslate 임의번역$}{$CP932=AnyTranslate 任意翻訳$}{$CP0=AnyTranslate}"
 string GetVersion()                     -> "0.1.0"
 string GetDesc()                        -> 一句话说明
 string GetLoginTitle()                  -> 配置说明标题
